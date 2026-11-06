@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from reviewer.analysis.deep_review import deep_review
-from reviewer.analysis.triage import should_deep_review, triage_chunk
+from reviewer.analysis.triage import should_deep_review, should_escalate, triage_chunk
 from reviewer.index.graph import resolve_edges
 from reviewer.index.lexical import LexicalIndex
 from reviewer.index.parser import parse_python
@@ -27,6 +27,8 @@ from reviewer.retrieval.strategies import is_test_path
 from reviewer.runs.models import RunRecord, RunReport
 from reviewer.runs.tracing import RunStore, RunTracer
 from reviewer.settings import Settings, load_settings
+from reviewer.signals.collect import collect_signals
+from reviewer.signals.runners import tool_fingerprint
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,7 @@ class IndexReport:
     counts: dict[str, int]
     chunks_embedded: int
     embedder: str
+    signal_status: dict[str, str]
 
 
 def db_path_for(root: Path) -> Path:
@@ -57,7 +60,15 @@ def db_path_for_spec(spec: str) -> Path:
     return db_path_for(locate(spec))
 
 
-def index_repository(spec: str, embedder: Embedder | None = None) -> IndexReport:
+def default_signal_tools() -> tuple[str, ...]:
+    return tuple(load_settings().signals.tools)
+
+
+def index_repository(
+    spec: str,
+    embedder: Embedder | None = None,
+    signal_tools: Sequence[str] | None = None,
+) -> IndexReport:
     """Index a repository. Files whose content hash is unchanged are not re-parsed."""
     source = open_source(spec)
     manifest = build_manifest(source)
@@ -71,6 +82,7 @@ def index_repository(spec: str, embedder: Embedder | None = None) -> IndexReport
         store.remove_files(removed)
 
         changed = 0
+        changed_paths: list[str] = []
         syntax_errors = 0
         for entry in manifest.files:
             if stored.get(entry.path) == entry.sha256:
@@ -79,9 +91,17 @@ def index_repository(spec: str, embedder: Embedder | None = None) -> IndexReport
             syntax_errors += parsed.has_syntax_errors
             store.add_file(entry, parsed)
             changed += 1
+            changed_paths.append(entry.path)
 
         store.replace_edges(
             resolve_edges(store.load_symbols(), store.load_imports(), store.load_calls())
+        )
+        signal_status = _refresh_signals(
+            store,
+            source.root,
+            [f.path for f in manifest.files],
+            changed_paths,
+            default_signal_tools() if signal_tools is None else tuple(signal_tools),
         )
         chunks = store.load_chunks()
         LexicalIndex(store.conn).sync(chunks)
@@ -106,7 +126,30 @@ def index_repository(spec: str, embedder: Embedder | None = None) -> IndexReport
             counts=store.counts(),
             chunks_embedded=embedded,
             embedder=embedder.name,
+            signal_status=signal_status,
         )
+
+
+def _refresh_signals(
+    store: Store,
+    root: Path,
+    all_paths: list[str],
+    changed_paths: list[str],
+    tools: tuple[str, ...],
+) -> dict[str, str]:
+    """Re-run static tools on changed files, or on everything if tools or rules changed."""
+    if not tools:
+        return {}
+    fingerprint = tool_fingerprint(tools)
+    stale = store.get_meta("signals_fingerprint") != fingerprint
+    targets = all_paths if stale else changed_paths
+    if not targets:
+        return {tool: "cached" for tool in tools}
+    collection = collect_signals(root, targets, tools)
+    store.replace_signals(targets, collection.signals)
+    # A tool that was missing or failed is retried on the next index.
+    store.set_meta("signals_fingerprint", fingerprint if collection.complete else "")
+    return collection.status
 
 
 def context_for_file(
@@ -209,8 +252,14 @@ def review_repository(
                 run.chunks_triaged += 1
                 if triage is None:
                     continue  # failure already recorded; one bad chunk must not stop the run
-                if not should_deep_review(triage, settings.review.triage_threshold):
+                wanted = should_deep_review(triage, settings.review.triage_threshold)
+                escalated = not wanted and should_escalate(
+                    store.signals_in(chunk.path, chunk.start_line, chunk.end_line),
+                    settings.review.escalate_min_severity,
+                )
+                if not wanted and not escalated:
                     continue
+                run.chunks_escalated_by_signals += int(escalated)
                 bundle = build_context(
                     chunk, store, lexical, vectors, settings.retrieval.token_budget
                 )

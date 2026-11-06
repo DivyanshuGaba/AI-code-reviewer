@@ -17,6 +17,7 @@ from reviewer.pipeline import (
 from reviewer.retrieval.budget import DEFAULT_BUDGET
 from reviewer.retrieval.context import render_bundle
 from reviewer.runs.tracing import RunStore
+from reviewer.signals.models import SEVERITY_RANK
 
 app = typer.Typer(help="AI code review tool.", no_args_is_help=True, add_completion=False)
 
@@ -43,6 +44,9 @@ def index(target: str = typer.Argument(..., help="Local path or git URL of a rep
     typer.echo(f"  symbols     {c['symbols']}")
     typer.echo(f"  chunks      {c['chunks']}")
     typer.echo(f"  embeddings  {report.chunks_embedded} new ({report.embedder})")
+    for tool, status in report.signal_status.items():
+        typer.echo(f"  signals     {tool}: {status}")
+    typer.echo(f"  static hits {c['signals']}")
     typer.echo(f"  call sites  {c['calls']} ({c['edges']} resolved edges)")
     typer.echo(f"  database    {report.db_path}")
 
@@ -102,6 +106,35 @@ def context(
     for bundle in bundles:
         typer.echo(render_bundle(bundle))
         typer.echo("")
+
+
+@app.command()
+def signals(
+    repo: str = typer.Option(".", help="Repository path or URL that was indexed."),
+    file: str = typer.Option("", help="Only this file (repo-relative path)."),
+    min_severity: str = typer.Option("low", help="low, medium or high."),
+) -> None:
+    """List the normalised static-analysis signals stored for a repository."""
+    if min_severity not in SEVERITY_RANK:
+        typer.echo("error: --min-severity must be low, medium or high", err=True)
+        raise typer.Exit(1)
+    try:
+        db_path = db_path_for_spec(repo)
+    except SourceError as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(1) from err
+    if not db_path.exists():
+        typer.echo(f"error: no index for {repo}; run `reviewer index {repo}` first", err=True)
+        raise typer.Exit(1)
+    with Store(db_path) as store:
+        found = [
+            s
+            for s in store.load_signals(file or None)
+            if SEVERITY_RANK[s.severity] >= SEVERITY_RANK[min_severity]
+        ]
+    for s in found:
+        typer.echo(f"{s.path}:{s.line_start}  [{s.severity}] {s.ref} ({s.category})  {s.message}")
+    typer.echo(f"{len(found)} signal(s). These are hints, not verified findings.")
 
 
 @app.command()

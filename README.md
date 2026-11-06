@@ -4,9 +4,10 @@ An AI code review tool for Python repositories. It finds problems (bugs, securit
 readability, architecture), explains them, and proposes fixes as diffs that are verified in a
 sandbox before they are shown.
 
-> **Status: Phase 5 of 8.** Ingest, indexes, static signals (Ruff, Bandit, Semgrep), retrieval,
-> two-stage LLM review, fix generation and sandboxed verification are built, with a full run trace.
-> The report formats (Markdown, SARIF, HTML) and the repo-level pass are not built yet. The Claude calls are
+> **Status: Phase 6 of 8.** The full pipeline works: ingest, indexes, static signals, retrieval,
+> two-stage LLM review, a repo-level architecture pass, fix generation with sandboxed verification,
+> ranking, and JSON / Markdown / SARIF / HTML reports. Evals are not built yet. The Claude calls and
+> the Docker sandbox are covered by tests against fakes and mocks; neither has run live. The Claude calls are
 > covered by tests against a fake model only; they have not yet been exercised against the live API.
 
 ## Architecture
@@ -20,7 +21,7 @@ flowchart LR
     D --> E[Verify<br/>sandboxed patch + checks]
     E --> F[Rank and report<br/>JSON, MD, SARIF, HTML]
     classDef done fill:#d1fae5,stroke:#059669;
-    class A,B,C,D,E,S done;
+    class A,B,C,D,E,F,S done;
 ```
 
 Green boxes exist today (Analyze so far covers triage, deep review and fix generation). Everything shares one data store and every run is pinned to a commit SHA
@@ -96,6 +97,33 @@ python3 -m venv ~/.cache/reviewer/tools/semgrep
 (or put `semgrep` on your `PATH`, or point `REVIEWER_SEMGREP` at it). A tool that is missing or
 fails is reported by `index` and skipped; it never stops the run, and it is retried on the next
 index. Semgrep runs offline with the rules in `reviewer/config/semgrep/python.yaml`.
+
+### Full scan and reports
+
+```bash
+reviewer scan path/to/python/repo              # index, review, architecture pass, fixes, reports
+reviewer scan path/to/python/repo --no-fix     # skip fix generation and the sandbox
+reviewer report --repo path/to/python/repo     # re-render the latest run; no LLM calls
+```
+
+`scan` writes four files to `~/.cache/reviewer/reports/<run-id>/` (or `--out DIR`):
+
+| file | purpose |
+|---|---|
+| `report.json` | source of truth: ranked findings, fixes, verification results, architecture facts |
+| `report.md` | readable report with diffs and the checks behind each fix status |
+| `report.sarif` | SARIF 2.1.0 for GitHub code scanning and other tools; verified and unverified fixes are included as SARIF `fixes` |
+| `report.html` | one static page: no scripts, no external resources, a strict CSP, all text escaped |
+
+Findings are deduplicated (same file, category and overlapping lines) and ranked by
+`severity × confidence × (1 + log2(1 + blast radius))`. Blast radius is the number of distinct
+non-test functions that call the flagged function within three hops, or, for architecture
+findings, the modules that import the flagged module within three hops.
+
+The **repo-level pass** builds a module dependency graph from the import data, finds import cycles
+and the most depended-on modules deterministically, asks a cheap model for a one-sentence summary
+of each module, and then asks the stronger model for architecture findings that cite those facts.
+Findings that name modules that do not exist, or fall below the confidence bar, are dropped.
 
 ### Fixes and sandbox verification
 
@@ -216,6 +244,15 @@ land. It is never written to disk or committed.
   exactly (no fuzz); a multi-file patch is applied all-or-nothing. Nothing from the analysed repo is
   ever executed on the host: only parsing happens there, and tests, type checking (which can load
   mypy plugins) and linting run in the container.
+- **Deterministic facts first.** Cycles, hubs and dependents are computed in code and handed to the
+  model as facts to cite; the model is not asked to discover structure from prose. Test files are
+  excluded from the module graph so they do not make everything look coupled.
+- **One model of the report.** Every renderer reads the same `ScanReport`, so the formats cannot
+  disagree. A test applies a SARIF fix's replacements and checks it produces the same file as
+  applying the diff.
+- **Reports contain untrusted text.** Markdown escapes metacharacters and lengthens code fences
+  past any backtick run; the HTML escapes everything, has no script, and sets a CSP that forbids
+  loading anything.
 - **Not yet in the deep review:** read-only tool use (fetching extra files on demand). The
   retrieved context bundle is the only extra information the model sees.
 
@@ -226,6 +263,6 @@ land. It is never written to disk or committed.
 3. Triage and deep review with structured findings and a run store (done)
 4. Static signals (done)
 5. Fix generation and sandbox verification (done; Docker path tested with mocks only, see below)
-6. Repo-level pass, ranking, reports
+6. Repo-level pass, ranking, reports (done)
 7. Evals
 8. Stretch: GitHub Action, Ollama adapter, JS/TS

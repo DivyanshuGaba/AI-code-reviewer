@@ -1,5 +1,6 @@
-from pkg.orders import create_order
+from pkg.payments import Gateway
 
 
-def test_create_order():
-    assert create_order is not None
+def test_charge_rounds():
+    gateway = Gateway()
+    assert gateway.charge(1.239) == 1.24

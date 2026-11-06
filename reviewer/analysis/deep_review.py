@@ -123,6 +123,7 @@ def deep_review(
                     explanation=raw.explanation,
                     evidence=raw.evidence,
                     related_signals=[r for r in raw.related_signals if r in known_refs],
+                    chunk_id=target.id,
                     chunk_content_hash=target.content_hash,
                 ),
             )

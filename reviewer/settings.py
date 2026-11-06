@@ -14,24 +14,32 @@ class Models(BaseModel):
     triage: str
     deep_review: str
     fixgen: str
+    summary: str
+    repo_level: str
 
 
 class Effort(BaseModel):
     triage: str
     deep_review: str
     fixgen: str
+    summary: str
+    repo_level: str
 
 
 class PromptVersions(BaseModel):
     triage: str
     deep_review: str
     fixgen: str
+    module_summary: str
+    repo_level: str
 
 
 class MaxTokens(BaseModel):
     triage: int
     deep_review: int
     fixgen: int
+    summary: int
+    repo_level: int
 
 
 class Retrieval(BaseModel):
@@ -42,6 +50,12 @@ class FixSettings(BaseModel):
     min_severity: str
     max_changed_lines: int
     max_fixes: int
+
+
+class RepoLevelSettings(BaseModel):
+    min_modules: int
+    max_modules: int
+    max_findings: int
 
 
 class Signals(BaseModel):
@@ -66,6 +80,7 @@ class Settings(BaseModel):
     signals: Signals
     review: ReviewSettings
     fix: FixSettings
+    repo_level: RepoLevelSettings
 
 
 def load_settings(path: Path | None = None) -> Settings:

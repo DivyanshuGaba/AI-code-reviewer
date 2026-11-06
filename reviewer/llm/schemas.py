@@ -43,6 +43,25 @@ class DeepReviewResult(BaseModel):
     findings: list[RawFinding] = Field(default_factory=list, max_length=20)
 
 
+class ModuleSummaryResult(BaseModel):
+    summary: str = Field(min_length=3, max_length=400)
+
+
+class RepoFinding(BaseModel):
+    """An architecture-level problem spanning one or more modules."""
+
+    severity: Severity
+    confidence: float = Field(ge=0.0, le=1.0)
+    title: str = Field(min_length=3, max_length=140)
+    explanation: str = Field(min_length=3, max_length=2000)
+    evidence: str = Field(min_length=1, max_length=1000)
+    files: list[str] = Field(min_length=1, max_length=8)
+
+
+class RepoLevelResult(BaseModel):
+    findings: list[RepoFinding] = Field(default_factory=list, max_length=8)
+
+
 class FixEdit(BaseModel):
     """Replace `old_text` (which must occur exactly once in the target function)."""
 
@@ -71,6 +90,8 @@ class Finding(BaseModel):
     verification_status: VerificationStatus = "no_fix"
     chunk_content_hash: str
     related_signals: list[str] = Field(default_factory=list)  # e.g. "bandit:B602"
+    chunk_id: str = ""  # the reviewed function; empty for repo-level findings
+    related_files: list[str] = Field(default_factory=list)  # other modules (repo-level)
 
 
 def finding_id(file: str, chunk_hash: str, category: str, line_start: int, title: str) -> str:

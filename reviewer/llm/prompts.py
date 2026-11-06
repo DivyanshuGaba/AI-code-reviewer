@@ -47,7 +47,8 @@ def number_lines(text: str, first_line: int) -> str:
 
 
 _TAG_RE = re.compile(
-    r"</?(target_code|context_chunk|code_under_review|triage_hints|static_signals|finding)", re.I
+    r"</?(target_code|context_chunk|code_under_review|triage_hints|static_signals|finding|module_head|repo_facts|module_summaries|reviewed_findings)",
+    re.I,
 )
 
 

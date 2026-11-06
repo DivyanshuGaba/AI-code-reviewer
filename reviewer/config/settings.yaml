@@ -1,26 +1,34 @@
 # Pipeline settings. Bump config_version whenever behaviour-affecting values change;
 # it is recorded on every run so results stay comparable.
-config_version: "3"
+config_version: "4"
 
 models:
   triage: claude-haiku-5-5       # cheap, high recall
   deep_review: claude-sonnet-5-5 # stronger, precision-oriented
   fixgen: claude-sonnet-5-5
+  summary: claude-haiku-5-5       # one-sentence module summaries
+  repo_level: claude-sonnet-5-5   # architecture pass
 
 effort:
   triage: low
   deep_review: high
   fixgen: medium
+  summary: low
+  repo_level: high
 
 prompts:
   triage: v1
   deep_review: v2
   fixgen: v1
+  module_summary: v1
+  repo_level: v1
 
 max_tokens:
   triage: 2048
   deep_review: 8192
   fixgen: 4096
+  summary: 400
+  repo_level: 4096
 
 retrieval:
   token_budget: 6000
@@ -39,3 +47,8 @@ fix:
   min_severity: medium      # only findings at least this severe get a fix attempt
   max_changed_lines: 40     # reject larger diffs: fixes must stay minimal
   max_fixes: 10             # per run
+
+repo_level:
+  min_modules: 3            # skip the architecture pass for tiny repos
+  max_modules: 150          # summarise and show at most this many modules (most connected first)
+  max_findings: 5

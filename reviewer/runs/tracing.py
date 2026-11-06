@@ -18,6 +18,7 @@ from reviewer.llm.gateway import StructuredOutcome
 from reviewer.llm.prompts import Prompt
 from reviewer.llm.schemas import Finding
 from reviewer.runs.models import CallTrace, RunRecord, RunReport
+from reviewer.verify.models import VerificationResult
 
 _SECRET_PATTERNS = [
     re.compile(r"sk-ant-[A-Za-z0-9_\-]{8,}"),
@@ -49,6 +50,10 @@ CREATE TABLE IF NOT EXISTS calls (
 CREATE INDEX IF NOT EXISTS idx_calls_run ON calls(run_id);
 CREATE TABLE IF NOT EXISTS findings (
     id TEXT NOT NULL, run_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (run_id, id)
+);
+CREATE TABLE IF NOT EXISTS verifications (
+    finding_id TEXT NOT NULL, run_id TEXT NOT NULL, data TEXT NOT NULL,
+    PRIMARY KEY (run_id, finding_id)
 );
 """
 
@@ -90,6 +95,13 @@ class RunStore:
         )
         self.conn.commit()
 
+    def save_verifications(self, run_id: str, results: list[VerificationResult]) -> None:
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO verifications VALUES (?, ?, ?)",
+            [(v.finding_id, run_id, v.model_dump_json()) for v in results],
+        )
+        self.conn.commit()
+
     def list_runs(self) -> list[RunRecord]:
         rows = self.conn.execute("SELECT data FROM runs ORDER BY started_at DESC").fetchall()
         return [RunRecord.model_validate_json(r[0]) for r in rows]
@@ -104,8 +116,12 @@ class RunStore:
         findings = self.conn.execute(
             "SELECT data FROM findings WHERE run_id = ? ORDER BY rowid", (run_id,)
         ).fetchall()
+        verifications = self.conn.execute(
+            "SELECT data FROM verifications WHERE run_id = ? ORDER BY rowid", (run_id,)
+        ).fetchall()
         return RunReport(
             run=RunRecord.model_validate_json(row[0]),
+            verifications=[VerificationResult.model_validate_json(v[0]) for v in verifications],
             calls=[CallTrace.model_validate_json(c[0]) for c in calls],
             findings=[Finding.model_validate_json(f[0]) for f in findings],
         )

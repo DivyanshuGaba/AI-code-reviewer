@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import textwrap
+from pathlib import Path
+
 import typer
 
 from reviewer.index.store import Relation, Store
-from reviewer.ingest.sources import SourceError
+from reviewer.ingest.sources import SourceError, locate
 from reviewer.pipeline import (
     context_for_file,
     db_path_for_spec,
@@ -18,6 +21,9 @@ from reviewer.retrieval.budget import DEFAULT_BUDGET
 from reviewer.retrieval.context import render_bundle
 from reviewer.runs.tracing import RunStore
 from reviewer.signals.models import SEVERITY_RANK
+from reviewer.verify.apply_patch import PatchError, parse_patch
+from reviewer.verify.checks import Verifier
+from reviewer.verify.sandbox import DockerSandbox
 
 app = typer.Typer(help="AI code review tool.", no_args_is_help=True, add_completion=False)
 
@@ -142,6 +148,7 @@ def review(
     target: str = typer.Argument(..., help="Local path or git URL of a repository."),
     file: str = typer.Option("", help="Only review this file (repo-relative path)."),
     max_chunks: int = typer.Option(0, help="Review at most this many functions (0 = all)."),
+    fix: bool = typer.Option(False, "--fix", help="Also generate and sandbox-verify fixes."),
 ) -> None:
     """Triage and deep-review functions with Claude. Calls the API and costs money."""
     try:
@@ -149,6 +156,7 @@ def review(
             target,
             file=file or None,
             max_chunks=max_chunks or None,
+            fix=fix,
             progress=lambda msg: typer.echo(msg, err=True),
         )
     except SourceError as err:
@@ -157,6 +165,7 @@ def review(
 
     run = report.run
     out_path = write_report_json(report)
+    verification_by_id = {v.finding_id: v.checks for v in report.verifications}
     typer.echo("")
     for f in report.findings:
         typer.echo(
@@ -165,12 +174,24 @@ def review(
         typer.echo(f"    {f.file}:{f.line_start}-{f.line_end}  in {f.symbol}")
         typer.echo(f"    {f.explanation}")
         typer.echo(f"    evidence: {f.evidence}")
+        if f.verification_status != "no_fix":
+            typer.echo(f"    fix: {f.verification_status}")
+            for check in verification_by_id.get(f.id, []):
+                mark = {"passed": "ok", "failed": "FAILED", "skipped": "skipped"}[check.status]
+                typer.echo(f"      {check.name}: {mark} {check.detail}".rstrip())
+            typer.echo("")
+            typer.echo(textwrap.indent(f.suggested_diff or "", "    "))
         typer.echo("")
     typer.echo(
         f"Run {run.id}: {run.status}; {run.findings_count} finding(s) from "
         f"{run.chunks_deep_reviewed}/{run.chunks_total} functions deep-reviewed; "
         f"cost ${run.cost_usd:.4f}"
     )
+    if run.fixes_attempted:
+        typer.echo(
+            f"  fixes: {run.fixes_verified} verified, {run.fixes_unverified} unverified, "
+            f"{run.fixes_failed} failed, {run.fixes_not_generated} not generated"
+        )
     dropped = run.findings_dropped_low_confidence + run.findings_dropped_out_of_range
     if dropped or run.stage_failures:
         typer.echo(
@@ -181,6 +202,44 @@ def review(
     if run.status == "failed":
         typer.echo(f"error: {run.error}", err=True)
         raise typer.Exit(1)
+
+
+@app.command()
+def verify(
+    repo: str = typer.Argument(..., help="Local path of the repository."),
+    patch: Path = typer.Argument(..., help="Unified diff to apply and check."),
+) -> None:
+    """Apply a patch to a throwaway copy and check it in the sandbox. No LLM involved."""
+    try:
+        root = locate(repo)
+        diff = patch.read_text(encoding="utf-8")
+        files = {p.path for p in parse_patch(diff)}
+    except (SourceError, OSError, PatchError) as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(1) from err
+    with Verifier(DockerSandbox(), root) as verifier:
+        result = verifier.verify("manual", diff, files)
+    typer.echo(f"{result.status}  (sandbox: {result.sandbox}, {result.duration_s}s)")
+    for check in result.checks:
+        typer.echo(f"  {check.name}: {check.status} {check.detail}".rstrip())
+    if result.status == "fix_failed":
+        raise typer.Exit(1)
+
+
+@app.command("sandbox-build")
+def sandbox_build() -> None:
+    """Build the Docker image used to verify fixes. Needs network access once."""
+    sandbox = DockerSandbox()
+    typer.echo(f"Building {sandbox.image} (downloads a Python base image and tools)...")
+    try:
+        proc = sandbox.build_image()
+    except OSError as err:
+        typer.echo(f"error: docker is not available: {err}", err=True)
+        raise typer.Exit(1) from err
+    if proc.returncode != 0:
+        typer.echo(proc.stderr.strip()[-800:], err=True)
+        raise typer.Exit(1)
+    typer.echo("Done.")
 
 
 @app.command()

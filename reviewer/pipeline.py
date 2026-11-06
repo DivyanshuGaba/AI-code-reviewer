@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from reviewer.analysis.deep_review import deep_review
+from reviewer.analysis.fixgen import generate_fix
 from reviewer.analysis.triage import should_deep_review, should_escalate, triage_chunk
 from reviewer.index.graph import resolve_edges
 from reviewer.index.lexical import LexicalIndex
@@ -21,6 +22,7 @@ from reviewer.ingest.sources import SourceError, home_dir, locate, open_source
 from reviewer.llm.cache import LLMCache
 from reviewer.llm.embeddings import Embedder, default_embedder
 from reviewer.llm.gateway import LLM, AnthropicGateway, GatewayAuthError
+from reviewer.llm.schemas import SEVERITY_RANK, Finding
 from reviewer.retrieval.budget import DEFAULT_BUDGET
 from reviewer.retrieval.context import ContextBundle, build_context
 from reviewer.retrieval.strategies import is_test_path
@@ -29,6 +31,9 @@ from reviewer.runs.tracing import RunStore, RunTracer
 from reviewer.settings import Settings, load_settings
 from reviewer.signals.collect import collect_signals
 from reviewer.signals.runners import tool_fingerprint
+from reviewer.verify.checks import Verifier
+from reviewer.verify.models import VerificationResult
+from reviewer.verify.sandbox import DockerSandbox, Sandbox
 
 
 @dataclass(frozen=True)
@@ -194,6 +199,8 @@ def review_repository(
     *,
     file: str | None = None,
     max_chunks: int | None = None,
+    fix: bool = False,
+    sandbox: Sandbox | None = None,
     llm: LLM | None = None,
     settings: Settings | None = None,
     embedder: Embedder | None = None,
@@ -220,7 +227,9 @@ def review_repository(
         prompt_versions=settings.prompts.model_dump(),
         started_at=datetime.now(UTC).isoformat(),
     )
-    findings = []
+    findings: list[Finding] = []
+    bundles: dict[str, ContextBundle] = {}
+    verifications: list[VerificationResult] = []
 
     with (
         Store(index_report.db_path) as store,
@@ -268,11 +277,19 @@ def review_repository(
                 run.findings_dropped_low_confidence += outcome.dropped_low_confidence
                 run.findings_dropped_out_of_range += outcome.dropped_out_of_range
                 findings.extend(outcome.findings)
+                bundles.update({f.id: bundle for f in outcome.findings})
         except GatewayAuthError as err:
             status, error = "failed", str(err)
         except Exception as err:
             tracer.finish("failed", f"{type(err).__name__}: {err}")
             raise
+
+        if fix and findings and status != "failed":
+            verifications = _fix_findings(
+                findings, bundles, index_report.root, llm, cache, tracer, settings,
+                sandbox or DockerSandbox(), say,
+            )  # fmt: skip
+            run_store.save_verifications(run.id, verifications)
 
         run.findings_count = len(findings)
         run_store.save_findings(run.id, findings)
@@ -288,3 +305,60 @@ def write_report_json(report: RunReport) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(report.model_dump_json(indent=2))
     return path
+
+
+def _fix_findings(
+    findings: list[Finding],
+    bundles: dict[str, ContextBundle],
+    root: Path,
+    llm: LLM,
+    cache: LLMCache,
+    tracer: RunTracer,
+    settings: Settings,
+    sandbox: Sandbox,
+    say: Callable[[str], None],
+) -> list[VerificationResult]:
+    """Generate and verify a fix for each eligible finding, most severe first."""
+    run = tracer.run
+    floor = SEVERITY_RANK[settings.fix.min_severity]
+    eligible = sorted(
+        (f for f in findings if SEVERITY_RANK[f.severity] >= floor),
+        key=lambda f: (-SEVERITY_RANK[f.severity], -f.confidence, f.id),
+    )[: settings.fix.max_fixes]
+    results: list[VerificationResult] = []
+    if not eligible:
+        return results
+
+    try:
+        with Verifier(sandbox, root) as verifier:
+            for n, finding in enumerate(eligible, 1):
+                if tracer.cost_usd >= settings.review.max_cost_usd:
+                    say("stopping fixes: cost limit reached")
+                    run.status = "stopped_budget"
+                    break
+                say(
+                    f"[fix {n}/{len(eligible)}] {finding.file}:{finding.line_start} {finding.title}"
+                )
+                run.fixes_attempted += 1
+                file_text = (root / finding.file).read_text(encoding="utf-8")
+                outcome = generate_fix(
+                    llm, cache, tracer, settings, finding, bundles[finding.id], file_text
+                )
+                if outcome.diff is None:
+                    run.fixes_not_generated += 1
+                    say(f"    no fix: {outcome.failure}")
+                    continue
+                finding.suggested_diff = outcome.diff
+                result = verifier.verify(finding.id, outcome.diff, {finding.file})
+                finding.verification_status = result.status
+                results.append(result)
+                if result.status == "verified_fix":
+                    run.fixes_verified += 1
+                elif result.status == "fix_failed":
+                    run.fixes_failed += 1
+                else:
+                    run.fixes_unverified += 1
+                say(f"    {result.status}")
+    except GatewayAuthError as err:
+        run.status, run.error = "failed", str(err)
+    return results

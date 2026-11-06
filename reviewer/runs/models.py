@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from reviewer.llm.schemas import Finding
+from reviewer.verify.models import VerificationResult
 
 RunStatus = Literal["running", "completed", "stopped_budget", "failed"]
 
@@ -56,9 +57,15 @@ class RunRecord(BaseModel):
     findings_dropped_low_confidence: int = 0
     findings_dropped_out_of_range: int = 0
     findings_count: int = 0
+    fixes_attempted: int = 0
+    fixes_not_generated: int = 0
+    fixes_verified: int = 0
+    fixes_unverified: int = 0
+    fixes_failed: int = 0
 
 
 class RunReport(BaseModel):
     run: RunRecord
     findings: list[Finding] = Field(default_factory=list)
     calls: list[CallTrace] = Field(default_factory=list)
+    verifications: list[VerificationResult] = Field(default_factory=list)

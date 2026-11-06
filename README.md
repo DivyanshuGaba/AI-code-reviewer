@@ -6,8 +6,9 @@ sandbox before they are shown.
 
 > **Status: Phase 6 of 8.** The full pipeline works: ingest, indexes, static signals, retrieval,
 > two-stage LLM review, a repo-level architecture pass, fix generation with sandboxed verification,
-> ranking, and JSON / Markdown / SARIF / HTML reports. Evals are not built yet. The Claude calls and
-> the Docker sandbox are covered by tests against fakes and mocks; neither has run live. The Claude calls are
+> ranking, JSON / Markdown / SARIF / HTML reports, and an eval harness with seeded bugs. The Claude
+> calls and the Docker sandbox are covered by tests against fakes and mocks; neither has run live,
+> so no real quality numbers exist yet. The Claude calls are
 > covered by tests against a fake model only; they have not yet been exercised against the live API.
 
 ## Architecture
@@ -97,6 +98,33 @@ python3 -m venv ~/.cache/reviewer/tools/semgrep
 (or put `semgrep` on your `PATH`, or point `REVIEWER_SEMGREP` at it). A tool that is missing or
 fails is reported by `index` and skipped; it never stops the run, and it is retried on the next
 index. Semgrep runs offline with the rules in `reviewer/config/semgrep/python.yaml`.
+
+### Evals
+
+```bash
+reviewer eval retrieval            # free: how well each retrieval strategy finds the context a bug needs
+reviewer eval run --dry-run        # estimate the cost first
+reviewer eval run --max-cost 3     # precision, recall, fix quality on 17 planted bugs (costs money)
+```
+
+Eight small repos with 17 seeded bugs (logic, security, performance), a bug-free control case, and
+tests that fail when a bug is present. Because we plant the bugs, ground truth is exact. Retrieval
+quality is measured separately from the model, and so is where recall is lost (triage versus deep
+review). See [evals/README.md](evals/README.md) for the case format, metrics and limits.
+
+Retrieval on the shipped cases (no model involved):
+
+| strategy | recall@1 | recall@3 | MRR |
+|---|---|---|---|
+| graph | 0.69 | 0.88 | 0.88 |
+| lexical | 0.19 | 0.56 | 0.49 |
+| vector (identifier hashing) | 0.31 | 0.75 | 0.61 |
+| graph + lexical | 0.69 | 1.00 | 0.94 |
+| fused (all) | 0.69 | 1.00 | 0.94 |
+
+The exact code graph is the strongest single signal, fusion beats any one strategy, and the offline
+vector index adds nothing over graph + lexical at this scale. That is the case for a real
+embedding model, and the point of measuring.
 
 ### Full scan and reports
 
@@ -264,5 +292,5 @@ land. It is never written to disk or committed.
 4. Static signals (done)
 5. Fix generation and sandbox verification (done; Docker path tested with mocks only, see below)
 6. Repo-level pass, ranking, reports (done)
-7. Evals
+7. Evals (harness done; live model numbers pending a run with an API key)
 8. Stretch: GitHub Action, Ollama adapter, JS/TS

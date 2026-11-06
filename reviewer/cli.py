@@ -6,7 +6,9 @@ import typer
 
 from reviewer.index.store import Relation, Store
 from reviewer.ingest.sources import SourceError
-from reviewer.pipeline import db_path_for_spec, index_repository
+from reviewer.pipeline import context_for_file, db_path_for_spec, index_repository
+from reviewer.retrieval.budget import DEFAULT_BUDGET
+from reviewer.retrieval.context import render_bundle
 
 app = typer.Typer(help="AI code review tool.", no_args_is_help=True, add_completion=False)
 
@@ -32,6 +34,7 @@ def index(target: str = typer.Argument(..., help="Local path or git URL of a rep
     c = report.counts
     typer.echo(f"  symbols     {c['symbols']}")
     typer.echo(f"  chunks      {c['chunks']}")
+    typer.echo(f"  embeddings  {report.chunks_embedded} new ({report.embedder})")
     typer.echo(f"  call sites  {c['calls']} ({c['edges']} resolved edges)")
     typer.echo(f"  database    {report.db_path}")
 
@@ -69,6 +72,28 @@ def query(
             if external:
                 typer.echo(f"  Unresolved/external calls: {', '.join(external)}")
             typer.echo("")
+
+
+@app.command()
+def context(
+    file: str = typer.Argument(..., help="Source file, relative to the repo or absolute."),
+    repo: str = typer.Option(".", help="Repository path or URL that was indexed."),
+    symbol: str = typer.Option("", help="Only this function/method (e.g. Gateway.charge)."),
+    budget: int = typer.Option(DEFAULT_BUDGET, help="Token budget per bundle."),
+    as_json: bool = typer.Option(False, "--json", help="Print bundles as JSON."),
+) -> None:
+    """Show the retrieval context built for each function in a file."""
+    try:
+        bundles = context_for_file(repo, file, symbol or None, budget)
+    except SourceError as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(1) from err
+    if as_json:
+        typer.echo("[" + ",".join(b.model_dump_json() for b in bundles) + "]")
+        return
+    for bundle in bundles:
+        typer.echo(render_bundle(bundle))
+        typer.echo("")
 
 
 def _print_relations(relations: list[Relation], *, callers_side: bool) -> None:

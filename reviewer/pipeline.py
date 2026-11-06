@@ -409,6 +409,22 @@ def _fix_findings(
     return results
 
 
+def load_run_report(spec: str, run_id: str | None = None) -> RunReport:
+    """A stored run (default: the latest) for an indexed repository."""
+    db_path = db_path_for(locate(spec))
+    if not db_path.exists():
+        raise SourceError(f"no index for {spec}; run `reviewer index {spec}` first")
+    with RunStore(runs_db_path_for(db_path)) as run_store:
+        runs = run_store.list_runs()
+        if not runs:
+            raise SourceError("no runs yet; run `reviewer scan` or `reviewer review` first")
+        wanted = run_id or runs[0].id
+        loaded = run_store.load_report(wanted)
+        if loaded is None:
+            raise SourceError(f"no such run: {wanted}")
+        return loaded
+
+
 def generate_reports(
     spec: str,
     *,
@@ -424,15 +440,8 @@ def generate_reports(
     db_path = db_path_for(root)
     if not db_path.exists():
         raise SourceError(f"no index for {spec}; run `reviewer index {spec}` first")
-    with RunStore(runs_db_path_for(db_path)) as run_store, Store(db_path) as store:
-        if report is None:
-            runs = run_store.list_runs()
-            if not runs:
-                raise SourceError("no runs yet; run `reviewer scan` or `reviewer review` first")
-            wanted = run_id or runs[0].id
-            report = run_store.load_report(wanted)
-            if report is None:
-                raise SourceError(f"no such run: {wanted}")
+    report = report or load_run_report(spec, run_id)
+    with Store(db_path) as store:
         trace = write_report_json(report)
         scan = build_scan_report(report, store, trace_file=trace)
     target = out_dir or home_dir() / "reports" / report.run.id

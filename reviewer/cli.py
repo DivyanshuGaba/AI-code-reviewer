@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import textwrap
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from reviewer.pipeline import (
     db_path_for_spec,
     generate_reports,
     index_repository,
+    load_run_report,
     review_repository,
     runs_db_path_for,
     write_report_json,
@@ -29,9 +31,19 @@ from reviewer.pipeline import (
 from reviewer.report.build import ScanReport
 from reviewer.retrieval.budget import DEFAULT_BUDGET
 from reviewer.retrieval.context import render_bundle
+from reviewer.runs.models import RunReport
 from reviewer.runs.tracing import RunStore
 from reviewer.settings import load_settings
 from reviewer.signals.models import SEVERITY_RANK
+from reviewer.vcs import (
+    FixBranch,
+    VcsError,
+    create_fix_branch,
+    execute,
+    pr_body,
+    pr_commands,
+    pr_title,
+)
 from reviewer.verify.apply_patch import PatchError, parse_patch
 from reviewer.verify.checks import Verifier
 from reviewer.verify.sandbox import DockerSandbox
@@ -327,6 +339,87 @@ def report(
         typer.echo(f"error: {err}", err=True)
         raise typer.Exit(1) from err
     _print_report_summary(scan_report, paths)
+
+
+def _fix_branch(
+    repo: str, run: str, branch: str, include_unverified: bool
+) -> tuple[FixBranch, RunReport, Path]:
+    try:
+        run_report = load_run_report(repo, run or None)
+        root = locate(repo)
+        return (
+            create_fix_branch(
+                root, run_report, branch=branch or None, include_unverified=include_unverified
+            ),
+            run_report,
+            root,
+        )
+    except (SourceError, VcsError) as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(1) from err
+
+
+def _print_fix_branch(fb: FixBranch) -> None:
+    typer.echo(f"Created local branch {fb.branch} (based on {fb.base_branch}); nothing was pushed.")
+    for item in fb.applied:
+        typer.echo(f"  {item.commit[:10]}  {item.finding.title}")
+    for skipped in fb.skipped:
+        typer.echo(f"  skipped: {skipped.finding.title}: {skipped.reason}")
+
+
+@app.command("fix-branch")
+def fix_branch(
+    repo: str = typer.Option(".", help="Git repository that was reviewed."),
+    run: str = typer.Option("", help="Run id (default: the latest run)."),
+    branch: str = typer.Option("", help="Branch name (default: reviewer/fixes-<run id>)."),
+    include_unverified: bool = typer.Option(
+        False, "--include-unverified", help="Also use fixes the sandbox could not fully verify."
+    ),
+) -> None:
+    """Commit each verified fix from a run to a new local branch. Never pushes."""
+    fb, _, _ = _fix_branch(repo, run, branch, include_unverified)
+    _print_fix_branch(fb)
+
+
+@app.command()
+def pr(
+    repo: str = typer.Option(".", help="Git repository that was reviewed."),
+    run: str = typer.Option("", help="Run id (default: the latest run)."),
+    branch: str = typer.Option("", help="Branch name (default: reviewer/fixes-<run id>)."),
+    base: str = typer.Option("", help="Branch to open the PR against (default: current branch)."),
+    include_unverified: bool = typer.Option(False, "--include-unverified"),
+    create: bool = typer.Option(
+        False, "--create", help="Push the branch and open the PR, after showing the commands."
+    ),
+) -> None:
+    """Prepare a pull request of verified fixes. By default only local: nothing is pushed.
+
+    Without --create this makes the local branch and prints the commands to publish it. With
+    --create it shows the same commands and asks for confirmation before running them.
+    """
+    fb, run_report, root = _fix_branch(repo, run, branch, include_unverified)
+    _print_fix_branch(fb)
+    body_file = home_dir() / "reports" / run_report.run.id / "pr-body.md"
+    body_file.parent.mkdir(parents=True, exist_ok=True)
+    with RunStore(runs_db_path_for(db_path_for_spec(repo))) as store:
+        loaded = store.load_report(run_report.run.id)
+    body_file.write_text(pr_body(run_report, fb, loaded.verifications if loaded else []))
+    commands = pr_commands(root, fb, base or fb.base_branch, pr_title(fb), body_file)
+
+    typer.echo(f"\nPull request text: {body_file}\nTo publish, run:")
+    for argv in commands:
+        typer.echo("  " + " ".join(shlex.quote(a) for a in argv))
+    if not create:
+        typer.echo("\nNot pushed. Re-run with --create to be asked to run these.")
+        return
+    if not typer.confirm("\nPush this branch and open the pull request?", default=False):
+        typer.echo("Not pushed.")
+        return
+    try:
+        execute(commands)
+    except VcsError as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(1) from err
 
 
 @app.command()

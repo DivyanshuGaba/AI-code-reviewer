@@ -48,7 +48,7 @@ def test_end_to_end_review(repo: Path) -> None:
     assert (f.file, f.symbol, f.verification_status) == (
         "pkg/payments.py",
         "Gateway.charge",
-        "unverified",
+        "no_fix",
     )
     assert f.id.startswith("F-") and f.suggested_diff is None
 
@@ -63,7 +63,7 @@ def test_end_to_end_review(repo: Path) -> None:
     assert "<context_chunk" in deep.user and deep.output.startswith("{")
     assert run.cost_usd == pytest.approx(sum(c.cost_usd for c in report.calls)) and run.cost_usd > 0
     assert run.commit_sha.startswith("dir-") and run.config_version == SETTINGS.config_version
-    assert run.models == {"triage": TRIAGE, "deep_review": DEEP}
+    assert run.models == SETTINGS.models.model_dump()
 
     path = write_report_json(report)
     assert json.loads(path.read_text())["run"]["id"] == run.id

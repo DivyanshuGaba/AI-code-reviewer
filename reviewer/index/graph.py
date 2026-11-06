@@ -226,6 +226,26 @@ class _Resolver:
         return edges(candidates, "name" if len(candidates) == 1 else "ambiguous")
 
 
+def file_dependencies(imports: list[ImportRef], paths: set[str]) -> dict[str, set[str]]:
+    """Which indexed files each file imports (module-level dependency graph, no self-loops)."""
+    resolver = _Resolver([], imports, paths)
+    deps: dict[str, set[str]] = {p: set() for p in paths}
+    for imp in imports:
+        if imp.path not in deps:
+            continue  # the importing file is outside the requested set (e.g. a test file)
+        targets: set[str] = set()
+        if imp.name and imp.name != "*":
+            sep = "" if imp.module.endswith(".") else "."
+            sub = resolver.module_path(imp.module + sep + imp.name, imp.path)
+            if sub:
+                targets.add(sub)  # `from pkg import module`
+        base = resolver.module_path(imp.module, imp.path) if imp.module else None
+        if base and not targets:
+            targets.add(base)
+        deps[imp.path] |= {t for t in targets if t != imp.path}
+    return deps
+
+
 def resolve_edges(
     symbols: list[Symbol], imports: list[ImportRef], calls: list[CallSite]
 ) -> list[Edge]:

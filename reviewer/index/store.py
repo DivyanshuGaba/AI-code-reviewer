@@ -98,6 +98,14 @@ class Store:
 
     # -- incremental file sync ---------------------------------------------------------
 
+    def file_lines(self) -> dict[str, int]:
+        rows = self.conn.execute("SELECT path, lines FROM files").fetchall()
+        return {r["path"]: int(r["lines"]) for r in rows}
+
+    def load_edges(self) -> list[Edge]:
+        rows = self.conn.execute("SELECT caller_id, callee_id, line, resolution FROM edges")
+        return [Edge(**dict(r)) for r in rows.fetchall()]
+
     def stored_hashes(self) -> dict[str, str]:
         rows = self.conn.execute("SELECT path, sha256 FROM files").fetchall()
         return {r["path"]: r["sha256"] for r in rows}

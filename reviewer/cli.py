@@ -7,8 +7,14 @@ from pathlib import Path
 
 import typer
 
+from reviewer.evals.cases import DEFAULT_CASES_DIR, CaseError
+from reviewer.evals.models import EvalResult
+from reviewer.evals.render import render_compare, render_eval, render_retrieval
+from reviewer.evals.retrieval_eval import run_retrieval_eval
+from reviewer.evals.runner import estimate_eval, run_eval
 from reviewer.index.store import Relation, Store
-from reviewer.ingest.sources import SourceError, locate
+from reviewer.ingest.sources import SourceError, home_dir, locate
+from reviewer.llm.gateway import AnthropicGateway
 from reviewer.pipeline import (
     context_for_file,
     db_path_for_spec,
@@ -22,12 +28,17 @@ from reviewer.report.build import ScanReport
 from reviewer.retrieval.budget import DEFAULT_BUDGET
 from reviewer.retrieval.context import render_bundle
 from reviewer.runs.tracing import RunStore
+from reviewer.settings import load_settings
 from reviewer.signals.models import SEVERITY_RANK
 from reviewer.verify.apply_patch import PatchError, parse_patch
 from reviewer.verify.checks import Verifier
 from reviewer.verify.sandbox import DockerSandbox
 
 app = typer.Typer(help="AI code review tool.", no_args_is_help=True, add_completion=False)
+eval_app = typer.Typer(
+    help="Measure review quality against seeded bugs.", no_args_is_help=True, add_completion=False
+)
+app.add_typer(eval_app, name="eval")
 
 
 @app.command()
@@ -339,6 +350,88 @@ def _print_relations(relations: list[Relation], *, callers_side: bool) -> None:
         else:
             where = f"{s.path}:{s.start_line}  (called at line {rel.line})"
         typer.echo(f"    {s.qualname:<28} {where}  [{rel.resolution}]")
+
+
+# -- evals ---------------------------------------------------------------------------------
+
+CASES_OPTION = typer.Option(DEFAULT_CASES_DIR, "--cases", help="Directory of eval cases.")
+CASE_OPTION = typer.Option(None, "--case", help="Only this case id (repeatable).")
+
+
+@eval_app.command("retrieval")
+def eval_retrieval(
+    cases: Path = CASES_OPTION,
+    case: list[str] | None = CASE_OPTION,
+) -> None:
+    """Retrieval quality per strategy on seeded bugs. Free: makes no model calls."""
+    try:
+        report = run_retrieval_eval(cases, case)
+    except CaseError as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(1) from err
+    typer.echo(render_retrieval(report))
+
+
+@eval_app.command("run")
+def eval_run(
+    cases: Path = CASES_OPTION,
+    case: list[str] | None = CASE_OPTION,
+    max_cost: float = typer.Option(3.0, help="Stop the whole eval at this spend (USD)."),
+    include_clean: bool = typer.Option(False, "--include-clean", help="Also review clean code."),
+    no_fix: bool = typer.Option(False, "--no-fix", help="Skip fix generation and verification."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Estimate cost; make no API calls."),
+    out: Path | None = typer.Option(None, help="Directory for results.json and summary.md."),
+) -> None:
+    """Run the review pipeline on seeded bugs and score it. Calls the API and costs money."""
+    settings = load_settings()
+    try:
+        if dry_run:
+            est = estimate_eval(cases, settings, include_clean, not no_fix, case)
+            typer.echo(
+                f"{int(est['functions'])} functions, {int(est['bugs'])} seeded bugs.\n"
+                f"Rough cost estimate: ${est['estimated_cost_usd']:.2f} "
+                f"(cap: ${max_cost:.2f}). No API calls were made."
+            )
+            return
+        result = run_eval(
+            cases,
+            llm=AnthropicGateway(),
+            sandbox=DockerSandbox(),
+            settings=settings,
+            max_cost_usd=max_cost,
+            include_clean=include_clean,
+            fix=not no_fix,
+            only=case,
+            progress=lambda msg: typer.echo(msg, err=True),
+        )
+    except CaseError as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(1) from err
+
+    target = out or home_dir() / "evals" / "results" / result.eval_id
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "results.json").write_text(result.model_dump_json(indent=2) + "\n")
+    summary = render_eval(result)
+    (target / "summary.md").write_text(summary)
+    typer.echo(summary)
+    typer.echo(f"Saved to {target}")
+    if result.status == "failed":
+        raise typer.Exit(1)
+
+
+@eval_app.command("compare")
+def eval_compare(
+    before: Path = typer.Argument(..., help="results.json of the baseline run."),
+    after: Path = typer.Argument(..., help="results.json of the new run."),
+) -> None:
+    """Show how metrics changed between two eval runs (for example, after a prompt change)."""
+    try:
+        a = EvalResult.model_validate_json(before.read_text())
+        b = EvalResult.model_validate_json(after.read_text())
+    except (OSError, ValueError) as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(1) from err
+    typer.echo(render_compare(a, b))
 
 
 if __name__ == "__main__":

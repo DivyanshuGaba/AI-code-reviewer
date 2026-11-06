@@ -23,6 +23,7 @@ from reviewer.ingest.sources import SourceError, home_dir, locate, open_source
 from reviewer.llm.cache import LLMCache
 from reviewer.llm.embeddings import Embedder, default_embedder
 from reviewer.llm.gateway import LLM, AnthropicGateway, GatewayAuthError
+from reviewer.llm.providers import build_llm
 from reviewer.llm.schemas import SEVERITY_RANK, Finding
 from reviewer.report import write_reports
 from reviewer.report.build import ScanReport, build_scan_report
@@ -217,6 +218,7 @@ def review_repository(
     settings: Settings | None = None,
     embedder: Embedder | None = None,
     languages: Sequence[str] | None = None,
+    provider: str | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> RunReport:
     """Index, then triage and deep-review functions; every call is traced and cached.
@@ -228,7 +230,8 @@ def review_repository(
     say = progress or (lambda _msg: None)
     source = open_source(spec)
     index_report = index_repository(spec, embedder, languages=languages)
-    llm = llm or AnthropicGateway()
+    if llm is None:
+        llm, settings = build_llm(settings, provider, anthropic_factory=AnthropicGateway)
     emb = embedder or default_embedder()
 
     run = RunRecord(

@@ -58,6 +58,12 @@ class RepoLevelSettings(BaseModel):
     max_findings: int
 
 
+class OllamaSettings(BaseModel):
+    host: str
+    num_ctx: int
+    models: Models
+
+
 class Signals(BaseModel):
     tools: list[str]
 
@@ -73,6 +79,8 @@ class ReviewSettings(BaseModel):
 class Settings(BaseModel):
     config_version: str
     languages: list[str]
+    provider: str
+    ollama: OllamaSettings
     models: Models
     effort: Effort
     prompts: PromptVersions

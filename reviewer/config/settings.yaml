@@ -2,6 +2,8 @@
 # it is recorded on every run so results stay comparable.
 config_version: "4"
 
+provider: anthropic   # anthropic | ollama (local models; see README)
+
 languages: [python]   # also: javascript, typescript (experimental; see README)
 
 models:
@@ -54,3 +56,14 @@ repo_level:
   min_modules: 3            # skip the architecture pass for tiny repos
   max_modules: 150          # summarise and show at most this many modules (most connected first)
   max_findings: 5
+
+# Used when provider is "ollama". Model names are examples: use whatever you have pulled.
+ollama:
+  host: http://localhost:11434   # OLLAMA_HOST overrides when this is left at the default
+  num_ctx: 16384                  # context window; Ollama's own default would truncate prompts
+  models:
+    triage: qwen2.5-coder:7b
+    deep_review: qwen2.5-coder:14b
+    fixgen: qwen2.5-coder:14b
+    summary: qwen2.5-coder:7b
+    repo_level: qwen2.5-coder:14b

@@ -16,6 +16,7 @@ from reviewer.index.store import Relation, Store
 from reviewer.ingest.filters import LANGUAGE_GROUPS
 from reviewer.ingest.sources import SourceError, home_dir, locate
 from reviewer.llm.gateway import AnthropicGateway
+from reviewer.llm.providers import build_llm
 from reviewer.pipeline import (
     context_for_file,
     db_path_for_spec,
@@ -42,6 +43,9 @@ eval_app = typer.Typer(
 app.add_typer(eval_app, name="eval")
 
 
+PROVIDER_OPTION = typer.Option(
+    None, "--provider", help="Model provider: anthropic (default) or ollama (local)."
+)
 LANG_OPTION = typer.Option(
     None, "--lang", help="Language to analyse: python, javascript, typescript (repeatable)."
 )
@@ -186,6 +190,7 @@ def review(
     max_chunks: int = typer.Option(0, help="Review at most this many functions (0 = all)."),
     fix: bool = typer.Option(False, "--fix", help="Also generate and sandbox-verify fixes."),
     lang: list[str] | None = LANG_OPTION,
+    provider: str | None = PROVIDER_OPTION,
 ) -> None:
     """Triage and deep-review functions with Claude. Calls the API and costs money."""
     try:
@@ -195,9 +200,10 @@ def review(
             max_chunks=max_chunks or None,
             fix=fix,
             languages=_languages(lang),
+            provider=provider,
             progress=lambda msg: typer.echo(msg, err=True),
         )
-    except SourceError as err:
+    except (SourceError, ValueError) as err:
         typer.echo(f"error: {err}", err=True)
         raise typer.Exit(1) from err
 
@@ -268,6 +274,7 @@ def scan(
     max_chunks: int = typer.Option(0, help="Review at most this many functions (0 = all)."),
     no_fix: bool = typer.Option(False, "--no-fix", help="Skip fix generation and verification."),
     lang: list[str] | None = LANG_OPTION,
+    provider: str | None = PROVIDER_OPTION,
 ) -> None:
     """Full pipeline: index, review, repo-level pass, fixes, ranking and reports.
 
@@ -280,10 +287,11 @@ def scan(
             fix=not no_fix,
             repo_level=True,
             languages=_languages(lang),
+            provider=provider,
             progress=lambda msg: typer.echo(msg, err=True),
         )
         scan_report, paths = generate_reports(target, report=run_report, out_dir=out)
-    except SourceError as err:
+    except (SourceError, ValueError) as err:
         typer.echo(f"error: {err}", err=True)
         raise typer.Exit(1) from err
     _print_report_summary(scan_report, paths)
@@ -408,6 +416,7 @@ def eval_run(
     no_fix: bool = typer.Option(False, "--no-fix", help="Skip fix generation and verification."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Estimate cost; make no API calls."),
     out: Path | None = typer.Option(None, help="Directory for results.json and summary.md."),
+    provider: str | None = PROVIDER_OPTION,
 ) -> None:
     """Run the review pipeline on seeded bugs and score it. Calls the API and costs money."""
     settings = load_settings()
@@ -420,18 +429,19 @@ def eval_run(
                 f"(cap: ${max_cost:.2f}). No API calls were made."
             )
             return
+        llm, run_settings = build_llm(settings, provider, anthropic_factory=AnthropicGateway)
         result = run_eval(
             cases,
-            llm=AnthropicGateway(),
+            llm=llm,
             sandbox=DockerSandbox(),
-            settings=settings,
+            settings=run_settings,
             max_cost_usd=max_cost,
             include_clean=include_clean,
             fix=not no_fix,
             only=case,
             progress=lambda msg: typer.echo(msg, err=True),
         )
-    except CaseError as err:
+    except (CaseError, ValueError) as err:
         typer.echo(f"error: {err}", err=True)
         raise typer.Exit(1) from err
 

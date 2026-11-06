@@ -24,7 +24,7 @@ class GatewayError(RuntimeError):
 
 
 class GatewayAuthError(GatewayError):
-    """No usable credentials. Aborts the whole run."""
+    """The provider is unusable (no credentials, or it cannot be reached). Aborts the run."""
 
 
 class GatewayRefusal(GatewayError):

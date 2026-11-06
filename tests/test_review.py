@@ -55,7 +55,11 @@ def test_end_to_end_review(repo: Path) -> None:
     # eval-ready trace: every call keeps the prompt, output, model, versions and cost
     assert len(report.calls) == 13
     deep = next(c for c in report.calls if c.stage == "deep_review")
-    assert deep.model == DEEP and deep.prompt_version == "v1" and "Gateway.charge" in deep.user
+    assert (
+        deep.model == DEEP
+        and deep.prompt_version == SETTINGS.prompts.deep_review
+        and "Gateway.charge" in deep.user
+    )
     assert "<context_chunk" in deep.user and deep.output.startswith("{")
     assert run.cost_usd == pytest.approx(sum(c.cost_usd for c in report.calls)) and run.cost_usd > 0
     assert run.commit_sha.startswith("dir-") and run.config_version == SETTINGS.config_version

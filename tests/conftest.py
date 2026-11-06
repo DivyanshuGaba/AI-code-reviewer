@@ -17,6 +17,12 @@ def reviewer_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return home
 
 
+@pytest.fixture(autouse=True)
+def light_signals(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only Ruff by default; tests that exercise other tools ask for them explicitly."""
+    monkeypatch.setattr("reviewer.pipeline.default_signal_tools", lambda: ("ruff",))
+
+
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     """A writable copy of the fixture repo (a plain directory, not a git repo)."""

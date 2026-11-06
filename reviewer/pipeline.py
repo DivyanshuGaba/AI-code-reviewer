@@ -221,6 +221,7 @@ def review_repository(
     languages: Sequence[str] | None = None,
     provider: str | None = None,
     diff_base: str | None = None,
+    max_cost_usd: float | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> RunReport:
     """Index, then triage and deep-review functions; every call is traced and cached.
@@ -234,6 +235,9 @@ def review_repository(
     index_report = index_repository(spec, embedder, languages=languages)
     if llm is None:
         llm, settings = build_llm(settings, provider, anthropic_factory=AnthropicGateway)
+    if max_cost_usd is not None:
+        settings = settings.model_copy(deep=True)
+        settings.review.max_cost_usd = max_cost_usd
     emb = embedder or default_embedder()
 
     run = RunRecord(

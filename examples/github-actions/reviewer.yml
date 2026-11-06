@@ -1,0 +1,41 @@
+# Copy to .github/workflows/reviewer.yml in the repository you want reviewed.
+#
+# Replace YOUR_ORG/reviewer@v1 with wherever you publish this action. Pin to a full commit SHA
+# for anything security-sensitive. Add ANTHROPIC_API_KEY as a repository secret.
+#
+# Safety notes:
+#  * Trigger is `pull_request`, never `pull_request_target`: the latter runs with secrets against
+#    code from the pull request, which would let a PR author exfiltrate the API key.
+#  * Pull requests from forks get no secrets; the job is skipped for them.
+#  * The reviewed code is untrusted input. reviewer only parses it on the runner; tests and type
+#    checks run in a network-less container (only when `fix: "true"`).
+name: reviewer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  security-events: write # upload SARIF to code scanning
+
+concurrency:
+  group: reviewer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # reviewer needs history to find what the PR changed
+          persist-credentials: false
+      - uses: YOUR_ORG/reviewer@v1
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          diff-base: origin/${{ github.base_ref }}
+          languages: python
+          max-cost: "2.00"

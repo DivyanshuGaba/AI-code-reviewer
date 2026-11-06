@@ -49,6 +49,9 @@ PROVIDER_OPTION = typer.Option(
 DIFF_BASE_OPTION = typer.Option(
     None, "--diff-base", help="Only review functions changed since this git ref (e.g. origin/main)."
 )
+MAX_COST_OPTION = typer.Option(
+    None, "--max-cost", help="Stop at this spend in USD (default: review.max_cost_usd in settings)."
+)
 LANG_OPTION = typer.Option(
     None, "--lang", help="Language to analyse: python, javascript, typescript (repeatable)."
 )
@@ -195,6 +198,7 @@ def review(
     lang: list[str] | None = LANG_OPTION,
     provider: str | None = PROVIDER_OPTION,
     diff_base: str | None = DIFF_BASE_OPTION,
+    max_cost: float | None = MAX_COST_OPTION,
 ) -> None:
     """Triage and deep-review functions with Claude. Calls the API and costs money."""
     try:
@@ -206,6 +210,7 @@ def review(
             languages=_languages(lang),
             provider=provider,
             diff_base=diff_base,
+            max_cost_usd=max_cost,
             progress=lambda msg: typer.echo(msg, err=True),
         )
     except (SourceError, ValueError) as err:
@@ -281,6 +286,7 @@ def scan(
     lang: list[str] | None = LANG_OPTION,
     provider: str | None = PROVIDER_OPTION,
     diff_base: str | None = DIFF_BASE_OPTION,
+    max_cost: float | None = MAX_COST_OPTION,
 ) -> None:
     """Full pipeline: index, review, repo-level pass, fixes, ranking and reports.
 
@@ -295,6 +301,7 @@ def scan(
             languages=_languages(lang),
             provider=provider,
             diff_base=diff_base,
+            max_cost_usd=max_cost,
             progress=lambda msg: typer.echo(msg, err=True),
         )
         scan_report, paths = generate_reports(target, report=run_report, out_dir=out)

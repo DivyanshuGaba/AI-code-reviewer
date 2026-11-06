@@ -1,0 +1,95 @@
+name: reviewer
+description: >-
+  AI code review. Finds bugs, security issues and risky changes, can propose sandbox-verified
+  fixes, and uploads SARIF to GitHub code scanning.
+author: reviewer
+branding:
+  icon: search
+  color: blue
+
+inputs:
+  anthropic-api-key:
+    description: Anthropic API key. Pass it from a repository secret, never inline.
+    required: true
+  diff-base:
+    description: >-
+      Git ref to compare against, for example origin/main. Only functions changed since the
+      merge-base are reviewed. Empty reviews the whole repository. The checkout needs full
+      history (actions/checkout with fetch-depth 0).
+    default: ""
+  languages:
+    description: Space-separated languages to analyse (python, javascript, typescript).
+    default: python
+  max-cost:
+    description: Stop the run once this much (USD) has been spent on model calls.
+    default: "2.00"
+  fix:
+    description: >-
+      Generate fixes and verify them in a Docker sandbox ("true" or "false"). Builds the sandbox
+      image first, which downloads a Python base image.
+    default: "false"
+  upload-sarif:
+    description: Upload the SARIF report to GitHub code scanning ("true" or "false").
+    default: "true"
+  python-version:
+    description: Python version used to run reviewer (3.12 or newer).
+    default: "3.12"
+
+outputs:
+  report-dir:
+    description: Directory containing report.json, report.md, report.sarif and report.html.
+    value: ${{ steps.scan.outputs.dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    # Inputs reach shell scripts only through environment variables, never by interpolating
+    # ${{ }} into the script text, so an input value cannot inject commands.
+    - name: Install reviewer
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: python -m pip install --quiet "$ACTION_PATH"
+
+    - name: Build the verification sandbox
+      if: ${{ inputs.fix == 'true' }}
+      shell: bash
+      run: reviewer sandbox-build
+
+    - name: Review
+      id: scan
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        DIFF_BASE: ${{ inputs.diff-base }}
+        LANGUAGES: ${{ inputs.languages }}
+        MAX_COST: ${{ inputs.max-cost }}
+        FIX: ${{ inputs.fix }}
+      run: |
+        set -euo pipefail
+        out="${RUNNER_TEMP}/reviewer-report"
+        args=(scan . --out "$out" --max-cost "$MAX_COST")
+        if [ -n "$DIFF_BASE" ]; then args+=(--diff-base "$DIFF_BASE"); fi
+        for lang in $LANGUAGES; do args+=(--lang "$lang"); done
+        if [ "$FIX" != "true" ]; then args+=(--no-fix); fi
+        reviewer "${args[@]}"
+        echo "dir=$out" >> "$GITHUB_OUTPUT"
+
+    - name: Add the report to the job summary
+      if: ${{ always() && steps.scan.outputs.dir != '' }}
+      shell: bash
+      env:
+        REPORT_DIR: ${{ steps.scan.outputs.dir }}
+      run: cat "$REPORT_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload SARIF to code scanning
+      if: ${{ always() && inputs.upload-sarif == 'true' && steps.scan.outputs.dir != '' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.scan.outputs.dir }}/report.sarif
+        category: reviewer

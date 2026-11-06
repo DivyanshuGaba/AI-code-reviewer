@@ -5,6 +5,8 @@ description = "AI code review tool: finds problems, explains them, and proposes 
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "bandit>=1.7",
+    "ruff>=0.5",
     "anthropic>=1.0",
     "pyyaml>=6.0",
     "chromadb>=1.0",
@@ -15,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mypy>=1.10", "pytest>=8.0", "ruff>=0.5", "types-PyYAML"]
+dev = ["mypy>=1.10", "pytest>=8.0", "types-PyYAML"]
 
 [project.scripts]
 reviewer = "reviewer.cli:app"
@@ -28,7 +30,7 @@ build-backend = "setuptools.build_meta"
 include = ["reviewer*"]
 
 [tool.setuptools.package-data]
-reviewer = ["config/settings.yaml", "config/prompts/*.md"]
+reviewer = ["config/settings.yaml", "config/prompts/*.md", "config/semgrep/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

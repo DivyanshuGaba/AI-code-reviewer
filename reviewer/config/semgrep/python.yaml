@@ -1,0 +1,93 @@
+# Local Semgrep rules. Runs fully offline; no registry or network access.
+rules:
+  - id: reviewer.subprocess-shell-true
+    languages: [python]
+    severity: ERROR
+    message: subprocess called with shell=True; a non-literal command allows shell injection.
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.$FUNC($CMD, ..., shell=True, ...)
+      - pattern-not: subprocess.$FUNC("...", ..., shell=True, ...)
+    metadata: {category: security}
+
+  - id: reviewer.eval-exec
+    languages: [python]
+    severity: ERROR
+    message: eval/exec on a non-literal value can execute attacker-controlled code.
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: exec($X)
+      - pattern-not: eval("...")
+      - pattern-not: exec("...")
+    metadata: {category: security}
+
+  - id: reviewer.pickle-loads
+    languages: [python]
+    severity: WARNING
+    message: Unpickling untrusted data can execute arbitrary code.
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+    metadata: {category: security}
+
+  - id: reviewer.yaml-unsafe-load
+    languages: [python]
+    severity: ERROR
+    message: yaml.load without a safe Loader can construct arbitrary Python objects; use yaml.safe_load.
+    patterns:
+      - pattern: yaml.load($X)
+      - pattern-not: yaml.load($X, Loader=yaml.SafeLoader)
+      - pattern-not: yaml.load($X, Loader=yaml.CSafeLoader)
+    metadata: {category: security}
+
+  - id: reviewer.tls-verify-disabled
+    languages: [python]
+    severity: ERROR
+    message: TLS certificate verification is disabled (verify=False).
+    pattern: requests.$METHOD(..., verify=False, ...)
+    metadata: {category: security}
+
+  - id: reviewer.sql-string-formatting
+    languages: [python]
+    severity: ERROR
+    message: SQL built with string formatting or concatenation; use parameterised queries.
+    pattern-either:
+      - pattern: $CUR.execute("..." % $X, ...)
+      - pattern: $CUR.execute("...".format(...), ...)
+      - pattern: $CUR.execute(f"...", ...)
+      - pattern: $CUR.execute("..." + $X, ...)
+    metadata: {category: security}
+
+  - id: reviewer.mutable-default-argument
+    languages: [python]
+    severity: WARNING
+    message: Mutable default argument is shared between calls.
+    pattern-either:
+      - pattern: |
+          def $F(..., $ARG=[], ...):
+              ...
+      - pattern: |
+          def $F(..., $ARG={}, ...):
+              ...
+    metadata: {category: bug}
+
+  - id: reviewer.bare-except-pass
+    languages: [python]
+    severity: WARNING
+    message: Bare except that silently swallows every error, including KeyboardInterrupt.
+    pattern: |
+      try:
+          ...
+      except:
+          pass
+    metadata: {category: bug}
+
+  - id: reviewer.weak-hash
+    languages: [python]
+    severity: WARNING
+    message: MD5/SHA1 are broken for security purposes.
+    pattern-either:
+      - pattern: hashlib.md5(...)
+      - pattern: hashlib.sha1(...)
+    metadata: {category: security}

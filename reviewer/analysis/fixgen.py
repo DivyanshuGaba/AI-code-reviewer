@@ -64,6 +64,7 @@ def generate_fix(
     target = bundle.target
     prompt = load_prompt("fixgen", settings.prompts.fixgen)
     system, user = prompt.render(
+        language=target.language,
         schema=schema_json(FixResult),
         path=target.path,
         symbol=target.symbol,

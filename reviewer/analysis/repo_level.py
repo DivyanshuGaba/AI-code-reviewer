@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import PurePosixPath
 
 from reviewer.analysis import depgraph
 from reviewer.analysis.models import ArchitectureFacts, ModuleInfo
 from reviewer.analysis.triage import schema_json
 from reviewer.index.graph import file_dependencies
 from reviewer.index.store import Store
+from reviewer.ingest.filters import language_of
 from reviewer.ingest.sources import Source
 from reviewer.llm.cache import LLMCache
 from reviewer.llm.gateway import LLM, LLMRequest, complete_structured
@@ -78,6 +80,7 @@ def summarize_modules(
             continue
         head = "\n".join(text.splitlines()[:HEAD_LINES])
         system, user = prompt.render(
+            language=language_of(PurePosixPath(module.path)) or "python",
             schema=schema_json(ModuleSummaryResult),
             path=module.path,
             lines=str(module.lines),

@@ -17,7 +17,6 @@ not prove that the reported problem is gone.
 
 from __future__ import annotations
 
-import ast
 import json
 import re
 import shutil
@@ -25,10 +24,11 @@ import tempfile
 import time
 from collections import Counter
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import TracebackType
 
-from reviewer.ingest.filters import EXCLUDED_DIRS
+from reviewer.index.languages import syntax_error
+from reviewer.ingest.filters import EXCLUDED_DIRS, language_of
 from reviewer.llm.schemas import VerificationStatus
 from reviewer.signals.runners import RUFF_SELECT
 from reviewer.verify.apply_patch import PatchError, apply_patch
@@ -153,18 +153,28 @@ class Verifier:
         result.checks.append(CheckResult(name="apply", status="passed", detail=", ".join(changed)))
 
         # 2. syntax (parsing only; nothing is executed)
+        languages = {rel: language_of(PurePosixPath(rel)) or "python" for rel in changed}
         for rel in changed:
-            try:
-                ast.parse((patched / rel).read_text(encoding="utf-8"), filename=rel)
-            except SyntaxError as err:
-                detail = f"{rel}:{err.lineno}: {err.msg}"
-                result.checks.append(CheckResult(name="syntax", status="failed", detail=detail))
+            text = (patched / rel).read_text(encoding="utf-8")
+            problem = syntax_error(rel, text, languages[rel])
+            if problem:
+                result.checks.append(
+                    CheckResult(name="syntax", status="failed", detail=f"{rel}: {problem}")
+                )
                 skip_rest(["lint", "typecheck", "tests"], "syntax error")
                 return finish("fix_failed")
         result.checks.append(CheckResult(name="syntax", status="passed"))
 
         if self._unavailable is not None:
             skip_rest(["lint", "typecheck", "tests"], f"sandbox unavailable: {self._unavailable}")
+            return finish("fix_unverified")
+
+        foreign = sorted({lang for lang in languages.values() if lang != "python"})
+        if foreign:  # the sandbox image only carries Python tooling
+            skip_rest(
+                ["lint", "typecheck", "tests"],
+                f"no sandbox checks for {', '.join(foreign)}; only apply and syntax were checked",
+            )
             return finish("fix_unverified")
 
         # 3-5. sandboxed checks, cheapest first; stop at the first failure

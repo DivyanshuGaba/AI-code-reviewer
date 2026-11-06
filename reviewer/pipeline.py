@@ -14,8 +14,8 @@ from reviewer.analysis.fixgen import generate_fix
 from reviewer.analysis.repo_level import build_facts, repo_level_review, summarize_modules
 from reviewer.analysis.triage import should_deep_review, should_escalate, triage_chunk
 from reviewer.index.graph import resolve_edges
+from reviewer.index.languages import parse_file
 from reviewer.index.lexical import LexicalIndex
-from reviewer.index.parser import parse_python
 from reviewer.index.store import Store
 from reviewer.index.vectors import VectorIndex
 from reviewer.ingest.manifest import build_manifest
@@ -76,10 +76,11 @@ def index_repository(
     spec: str,
     embedder: Embedder | None = None,
     signal_tools: Sequence[str] | None = None,
+    languages: Sequence[str] | None = None,
 ) -> IndexReport:
     """Index a repository. Files whose content hash is unchanged are not re-parsed."""
     source = open_source(spec)
-    manifest = build_manifest(source)
+    manifest = build_manifest(source, tuple(languages or load_settings().languages))
     db_path = db_path_for(source.root)
 
     with Store(db_path) as store:
@@ -95,7 +96,7 @@ def index_repository(
         for entry in manifest.files:
             if stored.get(entry.path) == entry.sha256:
                 continue
-            parsed = parse_python(entry.path, (source.root / entry.path).read_bytes())
+            parsed = parse_file(entry.path, (source.root / entry.path).read_bytes(), entry.language)
             syntax_errors += parsed.has_syntax_errors
             store.add_file(entry, parsed)
             changed += 1
@@ -145,9 +146,16 @@ def _refresh_signals(
     changed_paths: list[str],
     tools: tuple[str, ...],
 ) -> dict[str, str]:
-    """Re-run static tools on changed files, or on everything if tools or rules changed."""
+    """Re-run static tools on changed files, or on everything if tools or rules changed.
+
+    The tools are Python-only, so other languages get no static signals.
+    """
     if not tools:
         return {}
+    all_paths = [p for p in all_paths if p.endswith(".py")]
+    changed_paths = [p for p in changed_paths if p.endswith(".py")]
+    if not all_paths:
+        return {tool: "skipped (no Python files)" for tool in tools}
     fingerprint = tool_fingerprint(tools)
     stale = store.get_meta("signals_fingerprint") != fingerprint
     targets = all_paths if stale else changed_paths
@@ -208,6 +216,7 @@ def review_repository(
     llm: LLM | None = None,
     settings: Settings | None = None,
     embedder: Embedder | None = None,
+    languages: Sequence[str] | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> RunReport:
     """Index, then triage and deep-review functions; every call is traced and cached.
@@ -218,7 +227,7 @@ def review_repository(
     settings = settings or load_settings()
     say = progress or (lambda _msg: None)
     source = open_source(spec)
-    index_report = index_repository(spec, embedder)
+    index_report = index_repository(spec, embedder, languages=languages)
     llm = llm or AnthropicGateway()
     emb = embedder or default_embedder()
 

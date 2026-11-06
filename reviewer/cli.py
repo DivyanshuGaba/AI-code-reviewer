@@ -13,6 +13,7 @@ from reviewer.evals.render import render_compare, render_eval, render_retrieval
 from reviewer.evals.retrieval_eval import run_retrieval_eval
 from reviewer.evals.runner import estimate_eval, run_eval
 from reviewer.index.store import Relation, Store
+from reviewer.ingest.filters import LANGUAGE_GROUPS
 from reviewer.ingest.sources import SourceError, home_dir, locate
 from reviewer.llm.gateway import AnthropicGateway
 from reviewer.pipeline import (
@@ -41,11 +42,33 @@ eval_app = typer.Typer(
 app.add_typer(eval_app, name="eval")
 
 
+LANG_OPTION = typer.Option(
+    None, "--lang", help="Language to analyse: python, javascript, typescript (repeatable)."
+)
+
+
+def _languages(values: list[str] | None) -> tuple[str, ...] | None:
+    if not values:
+        return None
+    unknown = set(values) - set(LANGUAGE_GROUPS)
+    if unknown:
+        typer.echo(
+            f"error: unknown language(s) {', '.join(sorted(unknown))}; "
+            f"choose from {', '.join(LANGUAGE_GROUPS)}",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return tuple(dict.fromkeys(values))
+
+
 @app.command()
-def index(target: str = typer.Argument(..., help="Local path or git URL of a repository.")) -> None:
+def index(
+    target: str = typer.Argument(..., help="Local path or git URL of a repository."),
+    lang: list[str] | None = LANG_OPTION,
+) -> None:
     """Ingest a repository and build its code graph."""
     try:
-        report = index_repository(target)
+        report = index_repository(target, languages=_languages(lang))
     except SourceError as err:
         typer.echo(f"error: {err}", err=True)
         raise typer.Exit(1) from err
@@ -162,6 +185,7 @@ def review(
     file: str = typer.Option("", help="Only review this file (repo-relative path)."),
     max_chunks: int = typer.Option(0, help="Review at most this many functions (0 = all)."),
     fix: bool = typer.Option(False, "--fix", help="Also generate and sandbox-verify fixes."),
+    lang: list[str] | None = LANG_OPTION,
 ) -> None:
     """Triage and deep-review functions with Claude. Calls the API and costs money."""
     try:
@@ -170,6 +194,7 @@ def review(
             file=file or None,
             max_chunks=max_chunks or None,
             fix=fix,
+            languages=_languages(lang),
             progress=lambda msg: typer.echo(msg, err=True),
         )
     except SourceError as err:
@@ -242,6 +267,7 @@ def scan(
     out: Path | None = typer.Option(None, help="Directory for the reports."),
     max_chunks: int = typer.Option(0, help="Review at most this many functions (0 = all)."),
     no_fix: bool = typer.Option(False, "--no-fix", help="Skip fix generation and verification."),
+    lang: list[str] | None = LANG_OPTION,
 ) -> None:
     """Full pipeline: index, review, repo-level pass, fixes, ranking and reports.
 
@@ -253,6 +279,7 @@ def scan(
             max_chunks=max_chunks or None,
             fix=not no_fix,
             repo_level=True,
+            languages=_languages(lang),
             progress=lambda msg: typer.echo(msg, err=True),
         )
         scan_report, paths = generate_reports(target, report=run_report, out_dir=out)

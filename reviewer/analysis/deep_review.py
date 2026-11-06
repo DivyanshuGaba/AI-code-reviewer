@@ -72,6 +72,7 @@ def deep_review(
     target = bundle.target
     prompt = load_prompt("deep_review", settings.prompts.deep_review)
     system, user = prompt.render(
+        language=target.language,
         schema=schema_json(DeepReviewResult),
         path=target.path,
         symbol=target.symbol,

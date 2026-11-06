@@ -13,6 +13,12 @@ from functools import cache
 
 from reviewer.settings import CONFIG_DIR
 
+LANGUAGE_NAMES = {
+    "python": "Python",
+    "javascript": "JavaScript",
+    "typescript": "TypeScript",
+    "tsx": "TypeScript (TSX)",
+}
 _SEPARATOR = "\n=== USER ===\n"
 _FIELD_RE = re.compile(r"\{([a-z_]+)\}")
 
@@ -24,11 +30,19 @@ class Prompt:
     system_template: str
     user_template: str
 
-    def render(self, **values: str) -> tuple[str, str]:
+    def render(self, *, language: str = "python", **values: str) -> tuple[str, str]:
         def fill(template: str) -> str:
             return _FIELD_RE.sub(lambda m: values[m.group(1)], template)
 
-        return fill(self.system_template).strip(), fill(self.user_template).strip()
+        system = fill(self.system_template).strip()
+        if language != "python":
+            name = LANGUAGE_NAMES.get(language, language)
+            system += (
+                f"\n\nLanguage note: the code you are given is {name}, not Python. Apply the "
+                f"instructions above to {name}; for example, 'function' includes methods and "
+                "arrow functions."
+            )
+        return system, fill(self.user_template).strip()
 
 
 @cache

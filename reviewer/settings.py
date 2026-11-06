@@ -72,6 +72,7 @@ class ReviewSettings(BaseModel):
 
 class Settings(BaseModel):
     config_version: str
+    languages: list[str]
     models: Models
     effort: Effort
     prompts: PromptVersions

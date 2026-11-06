@@ -2,6 +2,8 @@
 # it is recorded on every run so results stay comparable.
 config_version: "4"
 
+languages: [python]   # also: javascript, typescript (experimental; see README)
+
 models:
   triage: claude-haiku-5-5       # cheap, high recall
   deep_review: claude-sonnet-5-5 # stronger, precision-oriented

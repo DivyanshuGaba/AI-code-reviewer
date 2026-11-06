@@ -25,6 +25,7 @@ def triage_chunk(
 ) -> TriageResult | None:
     prompt = load_prompt("triage", settings.prompts.triage)
     system, user = prompt.render(
+        language=chunk.language,
         schema=schema_json(TriageResult),
         path=chunk.path,
         symbol=chunk.symbol,

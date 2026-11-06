@@ -4,9 +4,9 @@ An AI code review tool for Python repositories. It finds problems (bugs, securit
 readability, architecture), explains them, and proposes fixes as diffs that are verified in a
 sandbox before they are shown.
 
-> **Status: Phase 3 of 8.** Ingest, indexes, retrieval, and two-stage LLM review (triage, then deep
-> review) with structured findings and a full run trace work end to end. Static signals, fix
-> generation, sandbox verification and the report formats are not built yet. The Claude calls are
+> **Status: Phase 4 of 8.** Ingest, indexes, static signals (Ruff, Bandit, Semgrep), retrieval, and
+> two-stage LLM review (triage, then deep review) with structured findings and a full run trace work
+> end to end. Fix generation, sandbox verification and the report formats are not built yet. The Claude calls are
 > covered by tests against a fake model only; they have not yet been exercised against the live API.
 
 ## Architecture
@@ -20,7 +20,7 @@ flowchart LR
     D --> E[Verify<br/>sandboxed patch + checks]
     E --> F[Rank and report<br/>JSON, MD, SARIF, HTML]
     classDef done fill:#d1fae5,stroke:#059669;
-    class A,B,C,D done;
+    class A,B,C,D,S done;
 ```
 
 Green boxes exist today (Analyze so far covers triage and deep review). Everything shares one data store and every run is pinned to a commit SHA
@@ -75,6 +75,27 @@ Pass `--json` for the full bundle.
    0.0474  test_charge_rounds  tests/check_orders.py:4-6  (40 tok)
             - graph:test #1: calls Gateway.charge at tests/check_orders.py:6 [name]
 ```
+
+### Static signals
+
+`index` also runs Ruff, Bandit and Semgrep and normalises their output into one `Signal` schema
+(tool, rule, file, lines, category, severity, message). Inspect them with:
+
+```bash
+reviewer signals --repo path/to/python/repo --min-severity medium
+```
+
+Ruff and Bandit are installed with the package. **Semgrep is installed separately**, because its
+OpenTelemetry pins conflict with Chroma's:
+
+```bash
+python3 -m venv ~/.cache/reviewer/tools/semgrep
+~/.cache/reviewer/tools/semgrep/bin/pip install semgrep
+```
+
+(or put `semgrep` on your `PATH`, or point `REVIEWER_SEMGREP` at it). A tool that is missing or
+fails is reported by `index` and skipped; it never stops the run, and it is retried on the next
+index. Semgrep runs offline with the rules in `reviewer/config/semgrep/python.yaml`.
 
 ### Reviewing with Claude
 
@@ -153,6 +174,14 @@ land. It is never written to disk or committed.
 - **Repo content is untrusted.** Code is wrapped in delimiters the prompt declares as data,
   repository text cannot close those delimiters, review stages have no tools and no write access,
   and credentials are redacted from stored traces.
+- **Static signals are hints, not truth.** Ruff runs with the repository's own config ignored and
+  only correctness rules enabled; Semgrep uses a bundled offline rule pack, so results do not
+  depend on settings the analysed repo controls. Signals are stored per file and refreshed only for
+  changed files (or for everything when a tool, its version or its rules change). They reach the
+  deep review as a separate, delimited block that the prompt says may be false positives; a finding
+  can cite the signals it corresponds to, and citations of signals that were not in the bundle are
+  discarded. A medium-or-higher signal forces a deep review of its function even when triage said it
+  looked fine (recall), and the run counts how often that happened.
 - **Not yet in the deep review:** read-only tool use (fetching extra files on demand). The
   retrieved context bundle is the only extra information the model sees.
 
@@ -161,7 +190,7 @@ land. It is never written to disk or committed.
 1. Ingest, chunk, graph, SQLite store (done)
 2. Lexical and vector indexes, context builder (done)
 3. Triage and deep review with structured findings and a run store (done)
-4. Static signals
+4. Static signals (done)
 5. Fix generation and sandbox verification
 6. Repo-level pass, ranking, reports
 7. Evals

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from reviewer.analysis.deep_review import deep_review
+from reviewer.analysis.triage import should_deep_review, triage_chunk
 from reviewer.index.graph import resolve_edges
 from reviewer.index.lexical import LexicalIndex
 from reviewer.index.parser import parse_python
@@ -14,9 +18,15 @@ from reviewer.index.store import Store
 from reviewer.index.vectors import VectorIndex
 from reviewer.ingest.manifest import build_manifest
 from reviewer.ingest.sources import SourceError, home_dir, locate, open_source
+from reviewer.llm.cache import LLMCache
 from reviewer.llm.embeddings import Embedder, default_embedder
+from reviewer.llm.gateway import LLM, AnthropicGateway, GatewayAuthError
 from reviewer.retrieval.budget import DEFAULT_BUDGET
 from reviewer.retrieval.context import ContextBundle, build_context
+from reviewer.retrieval.strategies import is_test_path
+from reviewer.runs.models import RunRecord, RunReport
+from reviewer.runs.tracing import RunStore, RunTracer
+from reviewer.settings import Settings, load_settings
 
 
 @dataclass(frozen=True)
@@ -130,3 +140,102 @@ def context_for_file(
         lexical = LexicalIndex(store.conn)
         vectors = VectorIndex(vector_path_for(db_path), embedder or default_embedder())
         return [build_context(c, store, lexical, vectors, budget) for c in chunks]
+
+
+def runs_db_path_for(db_path: Path) -> Path:
+    return db_path.with_suffix(".runs.db")
+
+
+def review_repository(
+    spec: str,
+    *,
+    file: str | None = None,
+    max_chunks: int | None = None,
+    llm: LLM | None = None,
+    settings: Settings | None = None,
+    embedder: Embedder | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> RunReport:
+    """Index, then triage and deep-review functions; every call is traced and cached.
+
+    Test files are skipped (their code is used as context, not reviewed). The run stops
+    cleanly when `settings.review.max_cost_usd` is reached.
+    """
+    settings = settings or load_settings()
+    say = progress or (lambda _msg: None)
+    index_report = index_repository(spec, embedder)
+    llm = llm or AnthropicGateway()
+    emb = embedder or default_embedder()
+
+    run = RunRecord(
+        id=f"{datetime.now(UTC):%Y%m%dT%H%M%S}-{index_report.commit_sha[:8]}-{uuid.uuid4().hex[:4]}",
+        repo_root=str(index_report.root),
+        commit_sha=index_report.commit_sha,
+        dirty=index_report.dirty,
+        config_version=settings.config_version,
+        models=settings.models.model_dump(),
+        prompt_versions=settings.prompts.model_dump(),
+        started_at=datetime.now(UTC).isoformat(),
+    )
+    findings = []
+
+    with (
+        Store(index_report.db_path) as store,
+        RunStore(runs_db_path_for(index_report.db_path)) as run_store,
+    ):
+        tracer = RunTracer(run_store, run)
+        cache = LLMCache(run_store.conn)
+        lexical = LexicalIndex(store.conn)
+        vectors = VectorIndex(vector_path_for(index_report.db_path), emb)
+
+        chunks = [
+            c
+            for c in store.load_chunks()
+            if not is_test_path(c.path) and (file is None or c.path == file)
+        ]
+        if max_chunks is not None:
+            chunks = chunks[:max_chunks]
+        run.chunks_total = len(chunks)
+
+        status, error = "completed", None
+        try:
+            for i, chunk in enumerate(chunks, 1):
+                if tracer.cost_usd >= settings.review.max_cost_usd:
+                    status = "stopped_budget"
+                    say(f"stopping: cost limit ${settings.review.max_cost_usd:.2f} reached")
+                    break
+                say(f"[{i}/{len(chunks)}] {chunk.path}::{chunk.symbol}")
+                triage = triage_chunk(llm, cache, tracer, settings, chunk)
+                run.chunks_triaged += 1
+                if triage is None:
+                    continue  # failure already recorded; one bad chunk must not stop the run
+                if not should_deep_review(triage, settings.review.triage_threshold):
+                    continue
+                bundle = build_context(
+                    chunk, store, lexical, vectors, settings.retrieval.token_budget
+                )
+                outcome = deep_review(llm, cache, tracer, settings, bundle, triage)
+                run.chunks_deep_reviewed += 1
+                run.findings_dropped_low_confidence += outcome.dropped_low_confidence
+                run.findings_dropped_out_of_range += outcome.dropped_out_of_range
+                findings.extend(outcome.findings)
+        except GatewayAuthError as err:
+            status, error = "failed", str(err)
+        except Exception as err:
+            tracer.finish("failed", f"{type(err).__name__}: {err}")
+            raise
+
+        run.findings_count = len(findings)
+        run_store.save_findings(run.id, findings)
+        tracer.finish(status, error)
+        report = run_store.load_report(run.id)
+        assert report is not None
+    return report
+
+
+def write_report_json(report: RunReport) -> Path:
+    """The JSON file is the source of truth for a run: findings plus every traced call."""
+    path = home_dir() / "runs" / f"{report.run.id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report.model_dump_json(indent=2))
+    return path

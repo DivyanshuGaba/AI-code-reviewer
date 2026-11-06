@@ -6,9 +6,17 @@ import typer
 
 from reviewer.index.store import Relation, Store
 from reviewer.ingest.sources import SourceError
-from reviewer.pipeline import context_for_file, db_path_for_spec, index_repository
+from reviewer.pipeline import (
+    context_for_file,
+    db_path_for_spec,
+    index_repository,
+    review_repository,
+    runs_db_path_for,
+    write_report_json,
+)
 from reviewer.retrieval.budget import DEFAULT_BUDGET
 from reviewer.retrieval.context import render_bundle
+from reviewer.runs.tracing import RunStore
 
 app = typer.Typer(help="AI code review tool.", no_args_is_help=True, add_completion=False)
 
@@ -94,6 +102,73 @@ def context(
     for bundle in bundles:
         typer.echo(render_bundle(bundle))
         typer.echo("")
+
+
+@app.command()
+def review(
+    target: str = typer.Argument(..., help="Local path or git URL of a repository."),
+    file: str = typer.Option("", help="Only review this file (repo-relative path)."),
+    max_chunks: int = typer.Option(0, help="Review at most this many functions (0 = all)."),
+) -> None:
+    """Triage and deep-review functions with Claude. Calls the API and costs money."""
+    try:
+        report = review_repository(
+            target,
+            file=file or None,
+            max_chunks=max_chunks or None,
+            progress=lambda msg: typer.echo(msg, err=True),
+        )
+    except SourceError as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(1) from err
+
+    run = report.run
+    out_path = write_report_json(report)
+    typer.echo("")
+    for f in report.findings:
+        typer.echo(
+            f"[{f.severity.upper()}] {f.title}  ({f.category}, confidence {f.confidence:.2f})"
+        )
+        typer.echo(f"    {f.file}:{f.line_start}-{f.line_end}  in {f.symbol}")
+        typer.echo(f"    {f.explanation}")
+        typer.echo(f"    evidence: {f.evidence}")
+        typer.echo("")
+    typer.echo(
+        f"Run {run.id}: {run.status}; {run.findings_count} finding(s) from "
+        f"{run.chunks_deep_reviewed}/{run.chunks_total} functions deep-reviewed; "
+        f"cost ${run.cost_usd:.4f}"
+    )
+    dropped = run.findings_dropped_low_confidence + run.findings_dropped_out_of_range
+    if dropped or run.stage_failures:
+        typer.echo(
+            f"  dropped {dropped} low-confidence/out-of-range finding(s); "
+            f"{run.stage_failures} stage failure(s)"
+        )
+    typer.echo(f"  full trace: {out_path}")
+    if run.status == "failed":
+        typer.echo(f"error: {run.error}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def runs(
+    repo: str = typer.Option(".", help="Repository path or URL that was indexed."),
+) -> None:
+    """List past review runs for a repository."""
+    try:
+        db = runs_db_path_for(db_path_for_spec(repo))
+    except SourceError as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(1) from err
+    if not db.exists():
+        typer.echo("No runs yet.")
+        return
+    with RunStore(db) as store:
+        for r in store.list_runs():
+            typer.echo(
+                f"{r.id}  {r.status:<14} {r.findings_count} finding(s)  ${r.cost_usd:.4f}  "
+                f"commit {r.commit_sha[:10]}  config v{r.config_version}"
+            )
 
 
 def _print_relations(relations: list[Relation], *, callers_side: bool) -> None:

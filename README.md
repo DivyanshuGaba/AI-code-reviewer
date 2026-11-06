@@ -4,8 +4,10 @@ An AI code review tool for Python repositories. It finds problems (bugs, securit
 readability, architecture), explains them, and proposes fixes as diffs that are verified in a
 sandbox before they are shown.
 
-> **Status: Phase 2 of 8.** Ingest, the code graph, lexical and vector indexes, and the context
-> builder work end to end. LLM analysis, verification and reports are not built yet.
+> **Status: Phase 3 of 8.** Ingest, indexes, retrieval, and two-stage LLM review (triage, then deep
+> review) with structured findings and a full run trace work end to end. Static signals, fix
+> generation, sandbox verification and the report formats are not built yet. The Claude calls are
+> covered by tests against a fake model only; they have not yet been exercised against the live API.
 
 ## Architecture
 
@@ -18,10 +20,10 @@ flowchart LR
     D --> E[Verify<br/>sandboxed patch + checks]
     E --> F[Rank and report<br/>JSON, MD, SARIF, HTML]
     classDef done fill:#d1fae5,stroke:#059669;
-    class A,B,C done;
+    class A,B,C,D done;
 ```
 
-Green boxes exist today. Everything shares one data store and every run is pinned to a commit SHA
+Green boxes exist today (Analyze so far covers triage and deep review). Everything shares one data store and every run is pinned to a commit SHA
 so results can be scored later.
 
 ## Quickstart
@@ -74,6 +76,23 @@ Pass `--json` for the full bundle.
             - graph:test #1: calls Gateway.charge at tests/check_orders.py:6 [name]
 ```
 
+### Reviewing with Claude
+
+```bash
+export ANTHROPIC_API_KEY=...            # never written to disk or committed
+reviewer review path/to/python/repo --max-chunks 10
+reviewer runs --repo path/to/python/repo
+```
+
+`review` indexes the repo, then for each function: a cheap triage call (Claude Haiku 5.5) decides
+whether it deserves attention, and if so a deep review (Claude Sonnet 5.5) reads the function
+together with its `ContextBundle` and returns findings. This calls the API and costs money, so
+a hard per-run limit (`review.max_cost_usd` in `reviewer/config/settings.yaml`, default $2) stops
+the run cleanly. Test files are used as context but not reviewed.
+
+Each run writes `~/.cache/reviewer/runs/<run-id>.json`: the findings plus every model call with
+its full prompt, output, model, prompt version, tokens, cost and latency (secrets redacted).
+
 Indexes and clones live under `~/.cache/reviewer` (override with `REVIEWER_HOME`), never inside the
 analyzed repository.
 
@@ -117,11 +136,31 @@ land. It is never written to disk or committed.
 - **Sync by content hash.** Both the FTS table and the Chroma collection store each chunk's content
   hash, so unchanged chunks are never re-indexed or re-embedded.
 
+- **Structured output only.** The model replies with JSON that is validated against a pydantic
+  schema; an invalid reply is retried once with the validation error fed back, and a function that
+  still fails is recorded as a stage failure instead of stopping the run. The provider SDK is
+  imported in exactly one module (`llm/gateway.py`); everything else uses a small `LLM` protocol,
+  which is also how the tests run without a network.
+- **Precision over volume.** The deep review prompt tells the model that no findings is a good
+  outcome. Findings are then filtered in code: below `min_confidence` (0.6) or pointing outside the
+  target function are dropped (and counted on the run), and at most five are kept per function.
+- **Cache by content.** Responses are cached by (model, prompt id and version, exact rendered
+  request). The request contains the code and its retrieved context, so unchanged code costs
+  nothing on a re-scan and any change to code, context, prompt version or model is a miss.
+- **Prompts are versioned files** in `config/prompts/<id>.<version>.md` and the run records which
+  versions were used. **Finding ids are stable** (hash of file, code hash, category, line, title)
+  so runs can be compared and scored.
+- **Repo content is untrusted.** Code is wrapped in delimiters the prompt declares as data,
+  repository text cannot close those delimiters, review stages have no tools and no write access,
+  and credentials are redacted from stored traces.
+- **Not yet in the deep review:** read-only tool use (fetching extra files on demand). The
+  retrieved context bundle is the only extra information the model sees.
+
 ## Roadmap
 
 1. Ingest, chunk, graph, SQLite store (done)
 2. Lexical and vector indexes, context builder (done)
-3. Triage and deep review with structured findings and a run store
+3. Triage and deep review with structured findings and a run store (done)
 4. Static signals
 5. Fix generation and sandbox verification
 6. Repo-level pass, ranking, reports

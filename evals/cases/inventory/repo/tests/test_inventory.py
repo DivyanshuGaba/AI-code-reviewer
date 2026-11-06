@@ -31,3 +31,12 @@ def test_successful_order():
     inv = Inventory({"a": 5})
     assert place_order(inv, [("a", 2)]) == [("a", 2)]
     assert inv.available("a") == 3
+
+
+def test_quantities_must_be_positive():
+    inv = Inventory({"a": 5})
+    inv.reserve("a", 2)
+    for call in (inv.reserve, inv.release, inv.commit):
+        with pytest.raises(ValueError):
+            call("a", -1)
+    assert inv.reserved["a"] == 2 and inv.stock["a"] == 5

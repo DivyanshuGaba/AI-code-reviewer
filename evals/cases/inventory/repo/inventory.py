@@ -17,11 +17,15 @@ class Inventory:
         self.reserved[sku] = self.reserved.get(sku, 0) + qty
 
     def release(self, sku, qty):
+        if qty < 1:
+            raise ValueError("qty must be positive")
         held = self.reserved.get(sku, 0)
         self.reserved[sku] = max(0, held - qty)
 
     def commit(self, sku, qty):
         """Remove reserved units from stock for good."""
+        if qty < 1:
+            raise ValueError("qty must be positive")
         if qty > self.reserved.get(sku, 0):
             raise ValueError("cannot commit more than reserved")
         self.reserved[sku] -= qty

@@ -6,10 +6,10 @@ sandbox before they are shown.
 
 > **Status: all 8 phases built.** The full pipeline works: ingest, indexes, static signals, retrieval,
 > two-stage LLM review, a repo-level architecture pass, fix generation with sandboxed verification,
-> ranking, JSON / Markdown / SARIF / HTML reports, and an eval harness with seeded bugs. The Claude
-> calls and the Docker sandbox are covered by tests against fakes and mocks; neither has run live,
-> so no real quality numbers exist yet. The Claude calls are
-> covered by tests against a fake model only; they have not yet been exercised against the live API.
+> ranking, JSON / Markdown / SARIF / HTML reports, and an eval harness with seeded bugs.
+> **Run live so far:** the Claude review pipeline (one eval run, results below) and the Docker
+> sandbox's isolation. **Not yet run against the real thing:** Ollama, the GitHub Action, and
+> JavaScript / TypeScript review (parsing and graph are tested; no model has reviewed TS code).
 
 ## Architecture
 
@@ -146,6 +146,40 @@ Eight small repos with 17 seeded bugs (logic, security, performance), a bug-free
 tests that fail when a bug is present. Because we plant the bugs, ground truth is exact. Retrieval
 quality is measured separately from the model, and so is where recall is lost (triage versus deep
 review). See [evals/README.md](evals/README.md) for the case format, metrics and limits.
+
+#### First live results
+
+One run of `reviewer eval run --include-clean` on the shipped cases, with `claude-haiku-5-5` for
+triage and `claude-sonnet-5-5` for deep review and fixes. Cost $0.46.
+
+| | |
+|---|---|
+| Seeded bugs found | **15 of 17** (precision 88%, recall 88%, F1 0.88) |
+| Critical / high / medium bugs found | 13 of 13 |
+| Low-severity bugs found | 2 of 4 |
+| Category label correct on found bugs | 15 of 15 |
+| False positives on clean code | 1 in 38 functions |
+| Mean confidence, true vs false positives | 0.94 vs 0.72 |
+| Fixes produced for found bugs | 15 of 15; 12 of 15 identical to the original code |
+
+Where recall was lost: one low-severity performance bug never got past triage (the function
+looked fine to the cheap model), and one low-severity timing leak was reviewed but judged not worth
+reporting.
+
+How to read this:
+
+- **It is one run on 17 synthetic bugs.** Model output varies between runs and the sample is
+  small, so treat it as evidence that the pipeline works and behaves sensibly, not as a benchmark.
+  Planted bugs are also easier than real ones.
+- **The ground truth was not perfect.** Two of the three "false positives" pointed at real
+  weaknesses in the test code itself (the inventory fixture accepted negative quantities); that
+  fixture was corrected after this run. The third was a second report of the symptom of a planted
+  bug in the same function, which the one-finding-per-bug scoring counts as a false positive. The
+  scoring rule was left unchanged rather than adjusted to improve the score.
+- **Fix verification was not measured in this run**, because Docker was not running. Re-run the
+  eval with the sandbox built (`reviewer sandbox-build`) to measure `verified_fix` and whether the
+  case tests go from failing to passing.
+- Confidence separated real bugs from noise, but the thresholds were not tuned on this data.
 
 Retrieval on the shipped cases (no model involved):
 
@@ -325,7 +359,7 @@ land. It is never written to disk or committed.
 2. Lexical and vector indexes, context builder (done)
 3. Triage and deep review with structured findings and a run store (done)
 4. Static signals (done)
-5. Fix generation and sandbox verification (done; Docker path tested with mocks only, see below)
+5. Fix generation and sandbox verification (done; sandbox isolation tested on real Docker)
 6. Repo-level pass, ranking, reports (done)
-7. Evals (harness done; live model numbers pending a run with an API key)
+7. Evals (done; first live results below)
 8. Stretch: GitHub Action, PR creation, Ollama adapter, JS/TS (done; none of it run against the live services)

@@ -9,7 +9,8 @@ from pydantic import BaseModel, Field
 
 Category = Literal["bug", "security", "performance", "readability", "architecture"]
 Severity = Literal["critical", "high", "medium", "low", "info"]
-VerificationStatus = Literal["unverified", "verified_fix", "fix_unverified", "fix_failed"]
+VerificationStatus = Literal["no_fix", "verified_fix", "fix_unverified", "fix_failed"]
+SEVERITY_RANK: dict[str, int] = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
 
 
 class Concern(BaseModel):
@@ -42,6 +43,18 @@ class DeepReviewResult(BaseModel):
     findings: list[RawFinding] = Field(default_factory=list, max_length=20)
 
 
+class FixEdit(BaseModel):
+    """Replace `old_text` (which must occur exactly once in the target function)."""
+
+    old_text: str = Field(min_length=1, max_length=6000)
+    new_text: str = Field(max_length=6000)
+
+
+class FixResult(BaseModel):
+    edits: list[FixEdit] = Field(default_factory=list, max_length=5)  # empty = declined
+    explanation: str = Field(max_length=1500)
+
+
 class Finding(BaseModel):
     id: str
     file: str
@@ -55,7 +68,7 @@ class Finding(BaseModel):
     explanation: str
     evidence: str
     suggested_diff: str | None = None  # filled by fix generation (Phase 5)
-    verification_status: VerificationStatus = "unverified"
+    verification_status: VerificationStatus = "no_fix"
     chunk_content_hash: str
     related_signals: list[str] = Field(default_factory=list)  # e.g. "bandit:B602"
 

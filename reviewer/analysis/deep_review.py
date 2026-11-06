@@ -8,12 +8,19 @@ from reviewer.analysis.triage import schema_json
 from reviewer.llm.cache import LLMCache
 from reviewer.llm.gateway import LLM, LLMRequest, complete_structured
 from reviewer.llm.prompts import load_prompt, neutralise_tags, number_lines
-from reviewer.llm.schemas import DeepReviewResult, Finding, RawFinding, TriageResult, finding_id
+from reviewer.llm.schemas import (
+    SEVERITY_RANK,
+    DeepReviewResult,
+    Finding,
+    RawFinding,
+    TriageResult,
+    finding_id,
+)
 from reviewer.retrieval.context import ContextBundle
 from reviewer.runs.tracing import RunTracer
 from reviewer.settings import Settings
 
-_SEVERITY_WEIGHT = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
+_SEVERITY_WEIGHT = SEVERITY_RANK
 
 
 @dataclass

@@ -13,25 +13,35 @@ CONFIG_DIR = Path(__file__).parent / "config"
 class Models(BaseModel):
     triage: str
     deep_review: str
+    fixgen: str
 
 
 class Effort(BaseModel):
     triage: str
     deep_review: str
+    fixgen: str
 
 
 class PromptVersions(BaseModel):
     triage: str
     deep_review: str
+    fixgen: str
 
 
 class MaxTokens(BaseModel):
     triage: int
     deep_review: int
+    fixgen: int
 
 
 class Retrieval(BaseModel):
     token_budget: int
+
+
+class FixSettings(BaseModel):
+    min_severity: str
+    max_changed_lines: int
+    max_fixes: int
 
 
 class Signals(BaseModel):
@@ -55,6 +65,7 @@ class Settings(BaseModel):
     retrieval: Retrieval
     signals: Signals
     review: ReviewSettings
+    fix: FixSettings
 
 
 def load_settings(path: Path | None = None) -> Settings:

@@ -1,22 +1,26 @@
 # Pipeline settings. Bump config_version whenever behaviour-affecting values change;
 # it is recorded on every run so results stay comparable.
-config_version: "2"
+config_version: "3"
 
 models:
   triage: claude-haiku-5-5       # cheap, high recall
   deep_review: claude-sonnet-5-5 # stronger, precision-oriented
+  fixgen: claude-sonnet-5-5
 
 effort:
   triage: low
   deep_review: high
+  fixgen: medium
 
 prompts:
   triage: v1
   deep_review: v2
+  fixgen: v1
 
 max_tokens:
   triage: 2048
   deep_review: 8192
+  fixgen: 4096
 
 retrieval:
   token_budget: 6000
@@ -30,3 +34,8 @@ review:
   min_confidence: 0.6       # precision over volume: drop findings below this
   max_findings_per_chunk: 5
   max_cost_usd: 2.0         # hard stop for one run
+
+fix:
+  min_severity: medium      # only findings at least this severe get a fix attempt
+  max_changed_lines: 40     # reject larger diffs: fixes must stay minimal
+  max_fixes: 10             # per run

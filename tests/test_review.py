@@ -172,3 +172,12 @@ def test_cli_review_reports_missing_credentials(
     monkeypatch.setattr("reviewer.pipeline.AnthropicGateway", lambda: NoKey())
     result = CliRunner().invoke(app, ["review", str(repo), "--max-chunks", "1"])
     assert result.exit_code == 1 and "ANTHROPIC_API_KEY" in result.output
+
+
+def test_max_cost_overrides_the_configured_limit(repo: Path) -> None:
+    llm = FakeLLM(handler)
+    report = review_repository(str(repo), llm=llm, max_cost_usd=0.00025)
+    assert report.run.status == "stopped_budget" and 0 < len(llm.requests) < 12
+
+    result = CliRunner().invoke(app, ["review", "--help"])
+    assert "--max-cost" in result.output and "--diff-base" in result.output

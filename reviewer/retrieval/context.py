@@ -20,6 +20,7 @@ from reviewer.retrieval.strategies import (
     lexical_candidates,
     vector_candidates,
 )
+from reviewer.signals.models import Signal
 
 
 class SourceHit(BaseModel):
@@ -50,6 +51,7 @@ class ContextBundle(BaseModel):
     excluded: list[ExcludedItem]
     token_count: int  # target plus included items
     token_budget: int
+    signals: list[Signal] = []  # static hints inside the target; not verified
 
 
 def build_context(
@@ -105,6 +107,7 @@ def build_context(
         excluded=excluded,
         token_count=used,
         token_budget=budget,
+        signals=store.signals_in(target.path, target.start_line, target.end_line),
     )
 
 
@@ -125,6 +128,8 @@ def render_bundle(bundle: ContextBundle) -> str:
         )
         for hit in item.sources:
             lines.append(f"            - {hit.source} #{hit.rank}: {hit.detail}")
+    for sig in bundle.signals:
+        lines.append(f"   signal {sig.ref} [{sig.severity}] line {sig.line_start}: {sig.message}")
     for ex in bundle.excluded:
         lines.append(f"   excluded {ex.chunk_id}: {ex.reason}")
     return "\n".join(lines)

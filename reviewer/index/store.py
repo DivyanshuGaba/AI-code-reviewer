@@ -10,6 +10,7 @@ from types import TracebackType
 
 from reviewer.index.models import CallSite, Chunk, Edge, ImportRef, ParsedFile, Symbol
 from reviewer.ingest.manifest import FileEntry
+from reviewer.signals.models import Signal
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -47,9 +48,15 @@ CREATE TABLE IF NOT EXISTS edges (
 );
 CREATE INDEX IF NOT EXISTS idx_edges_caller ON edges(caller_id);
 CREATE INDEX IF NOT EXISTS idx_edges_callee ON edges(callee_id);
+CREATE TABLE IF NOT EXISTS signals (
+    id TEXT PRIMARY KEY, tool TEXT NOT NULL, rule_id TEXT NOT NULL, path TEXT NOT NULL,
+    line_start INTEGER NOT NULL, line_end INTEGER NOT NULL, category TEXT NOT NULL,
+    severity TEXT NOT NULL, confidence TEXT, message TEXT NOT NULL, url TEXT, cwe INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_signals_path ON signals(path);
 """
 
-_PER_FILE_TABLES = ("symbols", "imports", "calls", "chunks")
+_PER_FILE_TABLES = ("symbols", "imports", "calls", "chunks", "signals")
 
 
 @dataclass(frozen=True)
@@ -159,6 +166,52 @@ class Store:
             [(e.caller_id, e.callee_id, e.line, e.resolution) for e in edges],
         )
         self.conn.commit()
+
+    # -- static signals -----------------------------------------------------------------------
+
+    def replace_signals(self, paths: Iterable[str], signals: Iterable[Signal]) -> None:
+        """Replace the stored signals of exactly these files."""
+        self.conn.executemany("DELETE FROM signals WHERE path = ?", [(p,) for p in paths])
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO signals VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                (
+                    s.id,
+                    s.tool,
+                    s.rule_id,
+                    s.path,
+                    s.line_start,
+                    s.line_end,
+                    s.category,
+                    s.severity,
+                    s.confidence,
+                    s.message,
+                    s.url,
+                    s.cwe,
+                )
+                for s in signals
+            ],
+        )
+        self.conn.commit()
+
+    def load_signals(self, path: str | None = None) -> list[Signal]:
+        sql = "SELECT * FROM signals"
+        args: tuple[str, ...] = ()
+        if path is not None:
+            sql, args = sql + " WHERE path = ?", (path,)
+        rows = self.conn.execute(sql + " ORDER BY path, line_start, tool, rule_id", args)
+        return [Signal(**dict(r)) for r in rows.fetchall()]
+
+    def signals_in(self, path: str, start_line: int, end_line: int) -> list[Signal]:
+        """Signals whose line range overlaps [start_line, end_line] in `path`."""
+        rows = self.conn.execute(
+            """
+            SELECT * FROM signals WHERE path = ? AND line_start <= ? AND line_end >= ?
+            ORDER BY line_start, tool, rule_id
+            """,
+            (path, end_line, start_line),
+        ).fetchall()
+        return [Signal(**dict(r)) for r in rows]
 
     # -- loading ------------------------------------------------------------------------
 
@@ -273,7 +326,7 @@ class Store:
     def counts(self) -> dict[str, int]:
         return {
             table: int(self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            for table in ("files", "symbols", "chunks", "calls", "edges")
+            for table in ("files", "symbols", "chunks", "calls", "edges", "signals")
         }
 
 

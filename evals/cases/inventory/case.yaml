@@ -1,0 +1,25 @@
+id: inventory
+description: Stock reservation with an off-by-one and a rollback that releases the wrong lines.
+bugs:
+  - id: last-unit
+    file: inventory.py
+    old: "if qty > self.available(sku):"
+    new: "if qty >= self.available(sku):"
+    category: bug
+    severity: medium
+    title: The last available unit can never be reserved
+    tests_detect: true
+    relevant: ["inventory.py::Inventory.available", "orders.py::place_order"]
+  - id: wrong-rollback
+    file: orders.py
+    old: |2
+          except ValueError:
+              for sku, qty in done:
+    new: |2
+          except ValueError:
+              for sku, qty in items:
+    category: bug
+    severity: high
+    title: Rollback releases every requested line, including ones this order never reserved
+    tests_detect: true
+    relevant: ["inventory.py::Inventory.release", "inventory.py::Inventory.reserve"]

@@ -1,0 +1,41 @@
+id: cache
+description: A cache that evicts the wrong entry, a quadratic helper and a shared default argument.
+bugs:
+  - id: evicts-newest
+    file: lru.py
+    old: "self._data.popitem(last=False)"
+    new: "self._data.popitem()"
+    category: bug
+    severity: high
+    title: Eviction removes the most recently used entry
+    tests_detect: true
+    relevant: ["lru.py::LRUCache.get"]
+  - id: quadratic-unique
+    file: helpers.py
+    old: |2
+          seen = set()
+          out = []
+          for item in items:
+              if item not in seen:
+                  seen.add(item)
+                  out.append(item)
+    new: |2
+          out = []
+          for item in items:
+              if item not in out:
+                  out.append(item)
+    category: performance
+    severity: low
+    title: Duplicate check scans a list, making unique() quadratic
+    tests_detect: false
+  - id: shared-default
+    file: helpers.py
+    old: |
+      def group_by_length(words, groups=None):
+          groups = {} if groups is None else groups
+    new: |
+      def group_by_length(words, groups={}):
+    category: bug
+    severity: medium
+    title: Mutable default argument is shared between calls
+    tests_detect: true

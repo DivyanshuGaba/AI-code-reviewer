@@ -1,0 +1,31 @@
+id: config
+description: Config parsing with a split bug and a port boundary error, plus a retry off-by-one.
+bugs:
+  - id: split-values
+    file: settings.py
+    old: 'key, value = line.split("=", 1)'
+    new: 'key, value = line.split("=")'
+    category: bug
+    severity: medium
+    title: Values containing '=' crash the parser
+    tests_detect: true
+  - id: port-boundary
+    file: settings.py
+    old: "if not 1 <= port <= 65535:"
+    new: "if not 1 <= port < 65535:"
+    category: bug
+    severity: low
+    title: Port 65535 is rejected
+    tests_detect: true
+  - id: retry-count
+    file: retry.py
+    old: "for _ in range(attempts):"
+    new: "for _ in range(attempts - 1):"
+    category: bug
+    severity: high
+    title: retry() makes one attempt fewer than requested
+    tests_detect: true
+acceptable:
+  - file: retry.py
+    text: "except Exception as err:"
+    note: A broad except is deliberate in a retry helper.

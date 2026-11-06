@@ -1,0 +1,29 @@
+id: uploads
+description: Upload handling with a path traversal hole and a leaked file handle.
+bugs:
+  - id: path-traversal
+    file: uploads.py
+    old: |2
+          if not target.is_relative_to(base):
+              raise PermissionError("path escapes the upload directory")
+    new: |2
+          if not target.exists():
+              raise FileNotFoundError(filename)
+    category: security
+    severity: critical
+    title: Filename can escape the upload directory (path traversal)
+    tests_detect: true
+  - id: leaked-handle
+    file: uploads.py
+    old: |2
+          with open(path, "w", encoding="utf-8") as fh:
+              for line in lines:
+                  fh.write(line + "\n")
+    new: |2
+          fh = open(path, "w", encoding="utf-8")
+          for line in lines:
+              fh.write(line + "\n")
+    category: bug
+    severity: low
+    title: File is never closed, so output may not be flushed
+    tests_detect: false

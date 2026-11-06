@@ -1,0 +1,3 @@
+id: control
+description: Correct code with some patterns that look risky but are not. Anything reported here is a false positive.
+bugs: []

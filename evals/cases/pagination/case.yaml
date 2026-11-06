@@ -1,0 +1,21 @@
+id: pagination
+description: Paging helpers with a skipped first page and a dropped partial page.
+bugs:
+  - id: skips-first-page
+    file: pager.py
+    old: "start = (page - 1) * per_page"
+    new: "start = page * per_page"
+    category: bug
+    severity: high
+    title: Page 1 skips the first page of results
+    tests_detect: true
+    relevant: ["list_view.py::render_page"]
+  - id: partial-page
+    file: pager.py
+    old: "return math.ceil(total_items / per_page)"
+    new: "return total_items // per_page"
+    category: bug
+    severity: medium
+    title: The final partial page is not counted
+    tests_detect: true
+    relevant: ["list_view.py::render_page"]

@@ -1,0 +1,21 @@
+id: pricing
+description: Discount maths with a sign error and a threshold off-by-one.
+bugs:
+  - id: sign
+    file: pricing.py
+    old: "price * (1 - pct / 100)"
+    new: "price * (1 + pct / 100)"
+    category: bug
+    severity: high
+    title: Discount increases the price instead of reducing it
+    tests_detect: true
+    relevant: ["pricing.py::bulk_unit_price"]
+  - id: threshold
+    file: pricing.py
+    old: "if qty >= 10:"
+    new: "if qty > 10:"
+    category: bug
+    severity: medium
+    title: Orders of exactly 10 units miss the bulk discount
+    tests_detect: true
+    relevant: ["cart.py::Cart.total", "pricing.py::apply_discount"]

@@ -30,7 +30,7 @@ build-backend = "setuptools.build_meta"
 include = ["reviewer*"]
 
 [tool.setuptools.package-data]
-reviewer = ["config/settings.yaml", "config/prompts/*.md", "config/semgrep/*.yaml"]
+reviewer = ["config/settings.yaml", "config/prompts/*.md", "config/semgrep/*.yaml", "verify/*.Dockerfile"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -42,6 +42,9 @@ extend-exclude = ["tests/fixtures"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
 
 [tool.mypy]
 python_version = "3.12"

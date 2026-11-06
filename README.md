@@ -4,9 +4,9 @@ An AI code review tool for Python repositories. It finds problems (bugs, securit
 readability, architecture), explains them, and proposes fixes as diffs that are verified in a
 sandbox before they are shown.
 
-> **Status: Phase 4 of 8.** Ingest, indexes, static signals (Ruff, Bandit, Semgrep), retrieval, and
-> two-stage LLM review (triage, then deep review) with structured findings and a full run trace work
-> end to end. Fix generation, sandbox verification and the report formats are not built yet. The Claude calls are
+> **Status: Phase 5 of 8.** Ingest, indexes, static signals (Ruff, Bandit, Semgrep), retrieval,
+> two-stage LLM review, fix generation and sandboxed verification are built, with a full run trace.
+> The report formats (Markdown, SARIF, HTML) and the repo-level pass are not built yet. The Claude calls are
 > covered by tests against a fake model only; they have not yet been exercised against the live API.
 
 ## Architecture
@@ -20,10 +20,10 @@ flowchart LR
     D --> E[Verify<br/>sandboxed patch + checks]
     E --> F[Rank and report<br/>JSON, MD, SARIF, HTML]
     classDef done fill:#d1fae5,stroke:#059669;
-    class A,B,C,D,S done;
+    class A,B,C,D,E,S done;
 ```
 
-Green boxes exist today (Analyze so far covers triage and deep review). Everything shares one data store and every run is pinned to a commit SHA
+Green boxes exist today (Analyze so far covers triage, deep review and fix generation). Everything shares one data store and every run is pinned to a commit SHA
 so results can be scored later.
 
 ## Quickstart
@@ -96,6 +96,31 @@ python3 -m venv ~/.cache/reviewer/tools/semgrep
 (or put `semgrep` on your `PATH`, or point `REVIEWER_SEMGREP` at it). A tool that is missing or
 fails is reported by `index` and skipped; it never stops the run, and it is retried on the next
 index. Semgrep runs offline with the rules in `reviewer/config/semgrep/python.yaml`.
+
+### Fixes and sandbox verification
+
+```bash
+reviewer sandbox-build                         # once; needs network and a running Docker
+reviewer review path/to/repo --fix             # generate and verify fixes
+reviewer verify path/to/repo my-change.diff    # check any patch, no LLM involved
+```
+
+With `--fix`, each finding at or above `fix.min_severity` (default medium) gets a fix attempt,
+and the diff is then checked in a Docker container with no network, no capabilities, no host
+environment variables and a read-only root, mounted only on a throwaway copy of the repo. Each
+check compares against an unpatched baseline, so existing problems are not blamed on the fix. A
+finding ends up as:
+
+| status | meaning |
+|---|---|
+| `verified_fix` | patch applies, parses, adds no Ruff or mypy errors, and the repo's tests ran (at least one passed before the patch) with no regressions |
+| `fix_unverified` | nothing failed, but tests could not run (none exist, dependencies missing in the image) or Docker was unavailable |
+| `fix_failed` | the patch does not apply, breaks syntax, adds lint or type errors, or breaks a passing test |
+| `no_fix` | no fix was produced (declined, invalid, too large, or below the severity cut-off) |
+
+"Verified" means the fix breaks nothing the sandbox could check. It does not prove the reported
+problem is gone. The sandbox image has only Ruff, mypy and pytest, so repositories with
+third-party dependencies will usually end up `fix_unverified` rather than `verified_fix`.
 
 ### Reviewing with Claude
 
@@ -182,6 +207,15 @@ land. It is never written to disk or committed.
   can cite the signals it corresponds to, and citations of signals that were not in the bundle are
   discarded. A medium-or-higher signal forces a deep review of its function even when triage said it
   looked fine (recall), and the run counts how often that happened.
+- **Fixes are edits, not hand-written diffs.** Models are unreliable at hunk headers and line
+  numbers, so the fix stage asks for exact `old_text` to `new_text` replacements inside the target
+  function, checks that each matches exactly once, and builds the unified diff itself. Fixes that
+  are declined, ambiguous, outside the function or larger than `fix.max_changed_lines` are rejected.
+- **A patch is untrusted input.** The applier refuses new, deleted, renamed or binary files,
+  absolute or `..` paths, `.git`, symlinks and any file the finding was not about; hunks must match
+  exactly (no fuzz); a multi-file patch is applied all-or-nothing. Nothing from the analysed repo is
+  ever executed on the host: only parsing happens there, and tests, type checking (which can load
+  mypy plugins) and linting run in the container.
 - **Not yet in the deep review:** read-only tool use (fetching extra files on demand). The
   retrieved context bundle is the only extra information the model sees.
 
@@ -191,7 +225,7 @@ land. It is never written to disk or committed.
 2. Lexical and vector indexes, context builder (done)
 3. Triage and deep review with structured findings and a run store (done)
 4. Static signals (done)
-5. Fix generation and sandbox verification
+5. Fix generation and sandbox verification (done; Docker path tested with mocks only, see below)
 6. Repo-level pass, ranking, reports
 7. Evals
 8. Stretch: GitHub Action, Ollama adapter, JS/TS

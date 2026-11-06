@@ -124,6 +124,8 @@ def render_sarif(scan: ScanReport) -> dict[str, Any]:
         ],
         "results": [_result(r, rule_index) for r in scan.findings],
     }
+    # Not `versionControlProvenance`: SARIF requires a repositoryUri there, which we do not
+    # reliably know (a local checkout may have no remote). GitHub rejects the file without it.
     if not run.commit_sha.startswith("dir-"):
-        sarif_run["versionControlProvenance"] = [{"revisionId": run.commit_sha}]
+        sarif_run["properties"] = {"commitSha": run.commit_sha}
     return {"$schema": SARIF_SCHEMA, "version": "2.1.0", "runs": [sarif_run]}

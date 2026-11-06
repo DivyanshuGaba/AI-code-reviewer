@@ -342,6 +342,7 @@ def test_sarif_structure_and_fix_replacements(repo: Path) -> None:
     apply_patch(repo, scan.findings[0].finding.suggested_diff or "")
     assert (repo / "pkg" / "payments.py").read_text() == via_sarif
     assert run["invocations"][0]["properties"]["runId"] == scan.run.id
+    assert "versionControlProvenance" not in run  # needs a repositoryUri GitHub insists on
 
 
 def test_sarif_omits_fixes_for_failed_and_missing_fixes(repo: Path) -> None:
@@ -410,3 +411,19 @@ def test_generate_reports_defaults_to_the_home_reports_directory(
 
 def test_parser_import_for_dependency_tests_is_available() -> None:
     assert parse_python("x.py", b"import os\n").imports  # guards the fixture helpers above
+
+
+def test_sarif_validates_against_the_official_schema_when_available(repo: Path) -> None:
+    """Set REVIEWER_SARIF_SCHEMA to the OASIS sarif-2.1.0 schema file (and install jsonschema)
+    to run this; GitHub's validator rejected an earlier version that offline structural tests
+    accepted."""
+    import os
+
+    schema_path = os.environ.get("REVIEWER_SARIF_SCHEMA")
+    jsonschema = pytest.importorskip("jsonschema")
+    if not schema_path:
+        pytest.skip("REVIEWER_SARIF_SCHEMA not set")
+    schema = json.loads(Path(schema_path).read_text())
+    scan, _ = build_scan(repo)
+    errors = list(jsonschema.Draft7Validator(schema).iter_errors(render_sarif(scan)))
+    assert errors == [], [e.message for e in errors[:3]]

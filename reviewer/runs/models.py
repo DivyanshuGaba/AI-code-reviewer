@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from reviewer.analysis.models import ArchitectureFacts
 from reviewer.llm.schemas import Finding
 from reviewer.verify.models import VerificationResult
 
@@ -69,3 +70,4 @@ class RunReport(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     calls: list[CallTrace] = Field(default_factory=list)
     verifications: list[VerificationResult] = Field(default_factory=list)
+    architecture: ArchitectureFacts | None = None

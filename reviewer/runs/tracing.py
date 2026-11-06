@@ -14,6 +14,7 @@ from types import TracebackType
 
 from pydantic import BaseModel
 
+from reviewer.analysis.models import ArchitectureFacts
 from reviewer.llm.gateway import StructuredOutcome
 from reviewer.llm.prompts import Prompt
 from reviewer.llm.schemas import Finding
@@ -55,6 +56,7 @@ CREATE TABLE IF NOT EXISTS verifications (
     finding_id TEXT NOT NULL, run_id TEXT NOT NULL, data TEXT NOT NULL,
     PRIMARY KEY (run_id, finding_id)
 );
+CREATE TABLE IF NOT EXISTS architecture (run_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 """
 
 
@@ -102,6 +104,12 @@ class RunStore:
         )
         self.conn.commit()
 
+    def save_architecture(self, run_id: str, facts: ArchitectureFacts) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO architecture VALUES (?, ?)", (run_id, facts.model_dump_json())
+        )
+        self.conn.commit()
+
     def list_runs(self) -> list[RunRecord]:
         rows = self.conn.execute("SELECT data FROM runs ORDER BY started_at DESC").fetchall()
         return [RunRecord.model_validate_json(r[0]) for r in rows]
@@ -119,8 +127,12 @@ class RunStore:
         verifications = self.conn.execute(
             "SELECT data FROM verifications WHERE run_id = ? ORDER BY rowid", (run_id,)
         ).fetchall()
+        arch = self.conn.execute(
+            "SELECT data FROM architecture WHERE run_id = ?", (run_id,)
+        ).fetchone()
         return RunReport(
             run=RunRecord.model_validate_json(row[0]),
+            architecture=ArchitectureFacts.model_validate_json(arch[0]) if arch else None,
             verifications=[VerificationResult.model_validate_json(v[0]) for v in verifications],
             calls=[CallTrace.model_validate_json(c[0]) for c in calls],
             findings=[Finding.model_validate_json(f[0]) for f in findings],

@@ -12,11 +12,13 @@ from reviewer.ingest.sources import SourceError, locate
 from reviewer.pipeline import (
     context_for_file,
     db_path_for_spec,
+    generate_reports,
     index_repository,
     review_repository,
     runs_db_path_for,
     write_report_json,
 )
+from reviewer.report.build import ScanReport
 from reviewer.retrieval.budget import DEFAULT_BUDGET
 from reviewer.retrieval.context import render_bundle
 from reviewer.runs.tracing import RunStore
@@ -202,6 +204,69 @@ def review(
     if run.status == "failed":
         typer.echo(f"error: {run.error}", err=True)
         raise typer.Exit(1)
+
+
+def _print_report_summary(scan: ScanReport, paths: dict[str, Path]) -> None:
+    run, s = scan.run, scan.summary
+    typer.echo("")
+    for r in scan.findings[:10]:
+        f = r.finding
+        where = f.file if f.symbol == "<repo>" else f"{f.file}:{f.line_start}"
+        fix = "" if f.verification_status == "no_fix" else f"  fix: {f.verification_status}"
+        typer.echo(f"{r.rank:>2}. [{f.severity.upper():<8}] {f.title}  ({where}){fix}")
+    if len(scan.findings) > 10:
+        typer.echo(f"    ... and {len(scan.findings) - 10} more in the report")
+    typer.echo(
+        f"\nRun {run.id}: {run.status}; {s.total} finding(s)"
+        + (f" ({s.duplicates_merged} duplicate(s) merged)" if s.duplicates_merged else "")
+        + f"; cost ${run.cost_usd:.4f}"
+    )
+    for fmt, path in paths.items():
+        typer.echo(f"  {fmt:<8} {path}")
+
+
+@app.command()
+def scan(
+    target: str = typer.Argument(..., help="Local path or git URL of a repository."),
+    out: Path | None = typer.Option(None, help="Directory for the reports."),
+    max_chunks: int = typer.Option(0, help="Review at most this many functions (0 = all)."),
+    no_fix: bool = typer.Option(False, "--no-fix", help="Skip fix generation and verification."),
+) -> None:
+    """Full pipeline: index, review, repo-level pass, fixes, ranking and reports.
+
+    Calls the Claude API and costs money (see review.max_cost_usd in settings.yaml).
+    """
+    try:
+        run_report = review_repository(
+            target,
+            max_chunks=max_chunks or None,
+            fix=not no_fix,
+            repo_level=True,
+            progress=lambda msg: typer.echo(msg, err=True),
+        )
+        scan_report, paths = generate_reports(target, report=run_report, out_dir=out)
+    except SourceError as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(1) from err
+    _print_report_summary(scan_report, paths)
+    if run_report.run.status == "failed":
+        typer.echo(f"error: {run_report.run.error}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def report(
+    repo: str = typer.Option(".", help="Repository path or URL that was scanned."),
+    run: str = typer.Option("", help="Run id (default: the latest run)."),
+    out: Path | None = typer.Option(None, help="Directory for the reports."),
+) -> None:
+    """Re-render the reports for a stored run. No LLM calls."""
+    try:
+        scan_report, paths = generate_reports(repo, run_id=run or None, out_dir=out)
+    except SourceError as err:
+        typer.echo(f"error: {err}", err=True)
+        raise typer.Exit(1) from err
+    _print_report_summary(scan_report, paths)
 
 
 @app.command()

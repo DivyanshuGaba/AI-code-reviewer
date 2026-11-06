@@ -11,6 +11,7 @@ from pathlib import Path
 
 from reviewer.analysis.deep_review import deep_review
 from reviewer.analysis.fixgen import generate_fix
+from reviewer.analysis.repo_level import build_facts, repo_level_review, summarize_modules
 from reviewer.analysis.triage import should_deep_review, should_escalate, triage_chunk
 from reviewer.index.graph import resolve_edges
 from reviewer.index.lexical import LexicalIndex
@@ -23,6 +24,8 @@ from reviewer.llm.cache import LLMCache
 from reviewer.llm.embeddings import Embedder, default_embedder
 from reviewer.llm.gateway import LLM, AnthropicGateway, GatewayAuthError
 from reviewer.llm.schemas import SEVERITY_RANK, Finding
+from reviewer.report import write_reports
+from reviewer.report.build import ScanReport, build_scan_report
 from reviewer.retrieval.budget import DEFAULT_BUDGET
 from reviewer.retrieval.context import ContextBundle, build_context
 from reviewer.retrieval.strategies import is_test_path
@@ -200,6 +203,7 @@ def review_repository(
     file: str | None = None,
     max_chunks: int | None = None,
     fix: bool = False,
+    repo_level: bool = False,
     sandbox: Sandbox | None = None,
     llm: LLM | None = None,
     settings: Settings | None = None,
@@ -213,6 +217,7 @@ def review_repository(
     """
     settings = settings or load_settings()
     say = progress or (lambda _msg: None)
+    source = open_source(spec)
     index_report = index_repository(spec, embedder)
     llm = llm or AnthropicGateway()
     emb = embedder or default_embedder()
@@ -284,6 +289,21 @@ def review_repository(
             tracer.finish("failed", f"{type(err).__name__}: {err}")
             raise
 
+        if repo_level and file is None and status == "completed":
+            facts, _deps = build_facts(store, settings.repo_level.max_modules)
+            if len(facts.modules) >= settings.repo_level.min_modules:
+                say("repo-level pass: summarising modules and reviewing architecture")
+                try:
+                    summarize_modules(llm, cache, tracer, settings, source, facts)
+                    findings.extend(
+                        repo_level_review(
+                            llm, cache, tracer, settings, facts, store.stored_hashes(), findings
+                        )
+                    )
+                except GatewayAuthError as err:
+                    status, error = "failed", str(err)
+                run_store.save_architecture(run.id, facts)
+
         if fix and findings and status != "failed":
             verifications = _fix_findings(
                 findings, bundles, index_report.root, llm, cache, tracer, settings,
@@ -322,7 +342,7 @@ def _fix_findings(
     run = tracer.run
     floor = SEVERITY_RANK[settings.fix.min_severity]
     eligible = sorted(
-        (f for f in findings if SEVERITY_RANK[f.severity] >= floor),
+        (f for f in findings if SEVERITY_RANK[f.severity] >= floor and f.id in bundles),
         key=lambda f: (-SEVERITY_RANK[f.severity], -f.confidence, f.id),
     )[: settings.fix.max_fixes]
     results: list[VerificationResult] = []
@@ -362,3 +382,33 @@ def _fix_findings(
     except GatewayAuthError as err:
         run.status, run.error = "failed", str(err)
     return results
+
+
+def generate_reports(
+    spec: str,
+    *,
+    run_id: str | None = None,
+    out_dir: Path | None = None,
+    report: RunReport | None = None,
+) -> tuple[ScanReport, dict[str, Path]]:
+    """Rank a run's findings and write report.json/.md/.sarif/.html. No LLM calls.
+
+    Uses `report` if given, otherwise loads `run_id` (default: the latest run) from the store.
+    """
+    root = locate(spec)
+    db_path = db_path_for(root)
+    if not db_path.exists():
+        raise SourceError(f"no index for {spec}; run `reviewer index {spec}` first")
+    with RunStore(runs_db_path_for(db_path)) as run_store, Store(db_path) as store:
+        if report is None:
+            runs = run_store.list_runs()
+            if not runs:
+                raise SourceError("no runs yet; run `reviewer scan` or `reviewer review` first")
+            wanted = run_id or runs[0].id
+            report = run_store.load_report(wanted)
+            if report is None:
+                raise SourceError(f"no such run: {wanted}")
+        trace = write_report_json(report)
+        scan = build_scan_report(report, store, trace_file=trace)
+    target = out_dir or home_dir() / "reports" / report.run.id
+    return scan, write_reports(scan, target)

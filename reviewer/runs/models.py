@@ -46,6 +46,7 @@ class RunRecord(BaseModel):
     models: dict[str, str]
     prompt_versions: dict[str, str]
     started_at: str
+    diff_base: str | None = None
     finished_at: str | None = None
     status: RunStatus = "running"
     error: str | None = None

@@ -46,6 +46,9 @@ app.add_typer(eval_app, name="eval")
 PROVIDER_OPTION = typer.Option(
     None, "--provider", help="Model provider: anthropic (default) or ollama (local)."
 )
+DIFF_BASE_OPTION = typer.Option(
+    None, "--diff-base", help="Only review functions changed since this git ref (e.g. origin/main)."
+)
 LANG_OPTION = typer.Option(
     None, "--lang", help="Language to analyse: python, javascript, typescript (repeatable)."
 )
@@ -191,6 +194,7 @@ def review(
     fix: bool = typer.Option(False, "--fix", help="Also generate and sandbox-verify fixes."),
     lang: list[str] | None = LANG_OPTION,
     provider: str | None = PROVIDER_OPTION,
+    diff_base: str | None = DIFF_BASE_OPTION,
 ) -> None:
     """Triage and deep-review functions with Claude. Calls the API and costs money."""
     try:
@@ -201,6 +205,7 @@ def review(
             fix=fix,
             languages=_languages(lang),
             provider=provider,
+            diff_base=diff_base,
             progress=lambda msg: typer.echo(msg, err=True),
         )
     except (SourceError, ValueError) as err:
@@ -275,6 +280,7 @@ def scan(
     no_fix: bool = typer.Option(False, "--no-fix", help="Skip fix generation and verification."),
     lang: list[str] | None = LANG_OPTION,
     provider: str | None = PROVIDER_OPTION,
+    diff_base: str | None = DIFF_BASE_OPTION,
 ) -> None:
     """Full pipeline: index, review, repo-level pass, fixes, ranking and reports.
 
@@ -288,6 +294,7 @@ def scan(
             repo_level=True,
             languages=_languages(lang),
             provider=provider,
+            diff_base=diff_base,
             progress=lambda msg: typer.echo(msg, err=True),
         )
         scan_report, paths = generate_reports(target, report=run_report, out_dir=out)

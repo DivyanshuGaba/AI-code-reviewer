@@ -18,6 +18,7 @@ from reviewer.index.languages import parse_file
 from reviewer.index.lexical import LexicalIndex
 from reviewer.index.store import Store
 from reviewer.index.vectors import VectorIndex
+from reviewer.ingest.diff import changed_ranges, overlaps
 from reviewer.ingest.manifest import build_manifest
 from reviewer.ingest.sources import SourceError, home_dir, locate, open_source
 from reviewer.llm.cache import LLMCache
@@ -219,6 +220,7 @@ def review_repository(
     embedder: Embedder | None = None,
     languages: Sequence[str] | None = None,
     provider: str | None = None,
+    diff_base: str | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> RunReport:
     """Index, then triage and deep-review functions; every call is traced and cached.
@@ -243,6 +245,7 @@ def review_repository(
         models=settings.models.model_dump(),
         prompt_versions=settings.prompts.model_dump(),
         started_at=datetime.now(UTC).isoformat(),
+        diff_base=diff_base,
     )
     findings: list[Finding] = []
     bundles: dict[str, ContextBundle] = {}
@@ -262,6 +265,12 @@ def review_repository(
             for c in store.load_chunks()
             if not is_test_path(c.path) and (file is None or c.path == file)
         ]
+        if diff_base is not None:
+            changed = changed_ranges(index_report.root, diff_base)
+            chunks = [
+                c for c in chunks if overlaps(c.start_line, c.end_line, changed.get(c.path, []))
+            ]
+            say(f"{len(chunks)} function(s) changed since {diff_base}")
         if max_chunks is not None:
             chunks = chunks[:max_chunks]
         run.chunks_total = len(chunks)
@@ -301,7 +310,7 @@ def review_repository(
             tracer.finish("failed", f"{type(err).__name__}: {err}")
             raise
 
-        if repo_level and file is None and status == "completed":
+        if repo_level and file is None and diff_base is None and status == "completed":
             facts, _deps = build_facts(store, settings.repo_level.max_modules)
             if len(facts.modules) >= settings.repo_level.min_modules:
                 say("repo-level pass: summarising modules and reviewing architecture")

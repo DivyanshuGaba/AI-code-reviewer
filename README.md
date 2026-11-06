@@ -4,7 +4,7 @@ An AI code review tool for Python repositories. It finds problems (bugs, securit
 readability, architecture), explains them, and proposes fixes as diffs that are verified in a
 sandbox before they are shown.
 
-> **Status: Phase 6 of 8.** The full pipeline works: ingest, indexes, static signals, retrieval,
+> **Status: all 8 phases built.** The full pipeline works: ingest, indexes, static signals, retrieval,
 > two-stage LLM review, a repo-level architecture pass, fix generation with sandboxed verification,
 > ranking, JSON / Markdown / SARIF / HTML reports, and an eval harness with seeded bugs. The Claude
 > calls and the Docker sandbox are covered by tests against fakes and mocks; neither has run live,
@@ -98,6 +98,41 @@ python3 -m venv ~/.cache/reviewer/tools/semgrep
 (or put `semgrep` on your `PATH`, or point `REVIEWER_SEMGREP` at it). A tool that is missing or
 fails is reported by `index` and skipped; it never stops the run, and it is retried on the next
 index. Semgrep runs offline with the rules in `reviewer/config/semgrep/python.yaml`.
+
+### Other languages, local models, CI and pull requests
+
+```bash
+reviewer scan path/to/repo --lang python --lang typescript   # JavaScript / TypeScript (experimental)
+reviewer scan path/to/repo --provider ollama                 # a local model instead of Claude
+reviewer scan . --diff-base origin/main                      # only functions changed since a ref
+reviewer pr --repo .                                         # branch of verified fixes + the commands to publish
+```
+
+- **JavaScript / TypeScript** (`.js .jsx .mjs .cjs .ts .tsx`) are parsed with the same Tree-sitter
+  approach as Python. The call graph follows relative imports, `export … from` re-exports,
+  `require`, namespace and default imports, `this.method()` and `new X()`. Python stays the default;
+  other languages are opt-in with `--lang` or `languages:` in `settings.yaml`. Limits: no static
+  signals (Ruff, Bandit and Semgrep are Python tools), no path aliases or package imports, and
+  fixes are checked for apply and syntax only, because the sandbox image has no Node, so they end
+  up `fix_unverified`.
+- **Ollama** runs every stage on a local model (`--provider ollama`, or `provider: ollama`). Model
+  names and the context size live under `ollama:` in `settings.yaml`; `OLLAMA_HOST` is honoured.
+  Cost is zero. Quality and JSON reliability depend on the model, and nothing here has been
+  measured against a real one, so use `reviewer eval run --provider ollama` before trusting it.
+- **`--diff-base REF`** limits a run to the functions whose lines changed since the merge-base with
+  `REF`, which is what keeps a pull-request review cheap. It needs full git history.
+- **GitHub Action** ([action.yml](action.yml), example workflow in
+  [examples/github-actions](examples/github-actions/reviewer.yml)): reviews a pull request's
+  changes, adds the report to the job summary and uploads SARIF to code scanning. Inputs reach the
+  scripts as environment variables, never interpolated into them; the example uses `pull_request`
+  (not `pull_request_target`), skips fork PRs because they have no secrets, and asks for minimal
+  permissions. The Action has not been run on GitHub; its structure is covered by tests.
+- **`reviewer fix-branch` / `reviewer pr`** turn verified fixes into one commit each on a new local
+  branch (hooks disabled; refuses a dirty tree, a moved HEAD or a detached HEAD, and never touches
+  your checked-out branch). `pr` also writes the pull-request text and prints the exact `git push`
+  and `gh pr create` commands. **Nothing is pushed unless you pass `--create` and answer yes** to
+  those commands, and there is no flag that skips the question. Fixes are verified one at a time, so
+  the PR text says they have not been tested together.
 
 ### Evals
 
@@ -293,4 +328,4 @@ land. It is never written to disk or committed.
 5. Fix generation and sandbox verification (done; Docker path tested with mocks only, see below)
 6. Repo-level pass, ranking, reports (done)
 7. Evals (harness done; live model numbers pending a run with an API key)
-8. Stretch: GitHub Action, Ollama adapter, JS/TS
+8. Stretch: GitHub Action, PR creation, Ollama adapter, JS/TS (done; none of it run against the live services)

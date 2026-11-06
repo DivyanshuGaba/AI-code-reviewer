@@ -187,6 +187,33 @@ class Store:
             ).fetchall()
         return [Chunk(**dict(r)) for r in rows]
 
+    def get_chunk(self, chunk_id: str) -> Chunk | None:
+        row = self.conn.execute("SELECT * FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+        return None if row is None else Chunk(**dict(row))
+
+    def chunk_at(self, path: str, line: int) -> Chunk | None:
+        """The innermost chunk of `path` containing `line`, if any."""
+        row = self.conn.execute(
+            """
+            SELECT * FROM chunks WHERE path = ? AND start_line <= ? AND end_line >= ?
+            ORDER BY end_line - start_line LIMIT 1
+            """,
+            (path, line, line),
+        ).fetchone()
+        return None if row is None else Chunk(**dict(row))
+
+    def chunk_for_symbol(self, symbol: Symbol) -> Chunk | None:
+        """The chunk that represents a symbol; a class maps to its `__init__`."""
+        if symbol.kind == "class":
+            row = self.conn.execute(
+                "SELECT * FROM chunks WHERE path = ? AND symbol = ?",
+                (symbol.path, f"{symbol.qualname}.__init__"),
+            ).fetchone()
+            return None if row is None else Chunk(**dict(row))
+        if symbol.kind == "module":
+            return None
+        return self.get_chunk(symbol.id) or self.chunk_at(symbol.path, symbol.start_line)
+
     # -- graph queries --------------------------------------------------------------------
 
     def find_symbols(self, query: str) -> list[Symbol]:

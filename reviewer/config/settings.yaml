@@ -1,6 +1,6 @@
 # Pipeline settings. Bump config_version whenever behaviour-affecting values change;
 # it is recorded on every run so results stay comparable.
-config_version: "1"
+config_version: "2"
 
 models:
   triage: claude-haiku-5-5       # cheap, high recall
@@ -12,7 +12,7 @@ effort:
 
 prompts:
   triage: v1
-  deep_review: v1
+  deep_review: v2
 
 max_tokens:
   triage: 2048
@@ -21,8 +21,12 @@ max_tokens:
 retrieval:
   token_budget: 6000
 
+signals:
+  tools: [ruff, bandit, semgrep]   # static hints; a missing tool is skipped, not an error
+
 review:
   triage_threshold: 0.3     # deep-review a chunk if needs_review or suspicion >= this
+  escalate_min_severity: medium  # a static signal this severe forces a deep review
   min_confidence: 0.6       # precision over volume: drop findings below this
   max_findings_per_chunk: 5
   max_cost_usd: 2.0         # hard stop for one run

@@ -35,6 +35,7 @@ class RawFinding(BaseModel):
     title: str = Field(min_length=3, max_length=140)
     explanation: str = Field(min_length=3, max_length=2000)
     evidence: str = Field(min_length=1, max_length=1000)
+    related_signals: list[str] = Field(default_factory=list, max_length=10)
 
 
 class DeepReviewResult(BaseModel):
@@ -56,6 +57,7 @@ class Finding(BaseModel):
     suggested_diff: str | None = None  # filled by fix generation (Phase 5)
     verification_status: VerificationStatus = "unverified"
     chunk_content_hash: str
+    related_signals: list[str] = Field(default_factory=list)  # e.g. "bandit:B602"
 
 
 def finding_id(file: str, chunk_hash: str, category: str, line_start: int, title: str) -> str:

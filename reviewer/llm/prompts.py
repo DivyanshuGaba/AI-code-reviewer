@@ -46,7 +46,9 @@ def number_lines(text: str, first_line: int) -> str:
     return "\n".join(f"{n:>5}| {line}" for n, line in enumerate(text.splitlines(), first_line))
 
 
-_TAG_RE = re.compile(r"</?(target_code|context_chunk|code_under_review|triage_hints)", re.I)
+_TAG_RE = re.compile(
+    r"</?(target_code|context_chunk|code_under_review|triage_hints|static_signals)", re.I
+)
 
 
 def neutralise_tags(text: str) -> str:

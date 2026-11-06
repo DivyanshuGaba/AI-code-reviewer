@@ -11,6 +11,7 @@ from reviewer.llm.prompts import load_prompt, neutralise_tags, number_lines
 from reviewer.llm.schemas import TriageResult
 from reviewer.runs.tracing import RunTracer
 from reviewer.settings import Settings
+from reviewer.signals.models import SEVERITY_RANK, Signal
 
 
 def schema_json(model: type[BaseModel]) -> str:
@@ -41,6 +42,12 @@ def triage_chunk(
     outcome = complete_structured(llm, request, TriageResult, prompt, cache)
     tracer.record_outcome("triage", chunk.id, prompt, outcome)
     return outcome.value
+
+
+def should_escalate(signals: list[Signal], min_severity: str) -> bool:
+    """A sufficiently severe static signal forces a deep review, whatever triage said."""
+    floor = SEVERITY_RANK[min_severity]
+    return any(SEVERITY_RANK[s.severity] >= floor for s in signals)
 
 
 def should_deep_review(result: TriageResult, threshold: float) -> bool:

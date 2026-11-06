@@ -51,6 +51,7 @@ class RunRecord(BaseModel):
     chunks_total: int = 0
     chunks_triaged: int = 0
     chunks_deep_reviewed: int = 0
+    chunks_escalated_by_signals: int = 0
     stage_failures: int = 0
     findings_dropped_low_confidence: int = 0
     findings_dropped_out_of_range: int = 0

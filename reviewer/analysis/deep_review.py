@@ -38,6 +38,16 @@ def render_context(bundle: ContextBundle) -> str:
     return "\n\n".join(blocks)
 
 
+def render_signals(bundle: ContextBundle) -> str:
+    if not bundle.signals:
+        return "(none)"
+    return "\n".join(
+        f"- {s.ref} ({s.category}, severity {s.severity}) lines {s.line_start}-{s.line_end}: "
+        f"{s.message}"
+        for s in bundle.signals
+    )
+
+
 def render_hints(triage: TriageResult | None) -> str:
     if triage is None or not triage.concerns:
         return "(none)"
@@ -62,6 +72,7 @@ def deep_review(
         end_line=str(target.end_line),
         code=neutralise_tags(number_lines(target.text, target.start_line)),
         hints=neutralise_tags(render_hints(triage)),
+        signals=neutralise_tags(render_signals(bundle)),
         context=render_context(bundle),
     )
     request = LLMRequest(
@@ -77,6 +88,7 @@ def deep_review(
     if outcome.value is None:
         return result
 
+    known_refs = {s.ref for s in bundle.signals}
     kept: list[tuple[RawFinding, Finding]] = []
     for raw in outcome.value.findings:
         in_range = target.start_line <= raw.line_start <= raw.line_end <= target.end_line
@@ -103,6 +115,7 @@ def deep_review(
                     title=raw.title,
                     explanation=raw.explanation,
                     evidence=raw.evidence,
+                    related_signals=[r for r in raw.related_signals if r in known_refs],
                     chunk_content_hash=target.content_hash,
                 ),
             )

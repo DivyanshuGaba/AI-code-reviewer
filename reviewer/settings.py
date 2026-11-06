@@ -34,8 +34,13 @@ class Retrieval(BaseModel):
     token_budget: int
 
 
+class Signals(BaseModel):
+    tools: list[str]
+
+
 class ReviewSettings(BaseModel):
     triage_threshold: float
+    escalate_min_severity: str
     min_confidence: float
     max_findings_per_chunk: int
     max_cost_usd: float
@@ -48,6 +53,7 @@ class Settings(BaseModel):
     prompts: PromptVersions
     max_tokens: MaxTokens
     retrieval: Retrieval
+    signals: Signals
     review: ReviewSettings
 
 

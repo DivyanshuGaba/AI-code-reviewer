@@ -22,12 +22,29 @@ EXCLUDED_DIRS = frozenset(
         ".eggs",
         "build",
         "dist",
+        "coverage",
+        ".next",
+        "bower_components",
         "site-packages",
         ".reviewer",
     }
 )
 
 PYTHON_SUFFIXES = frozenset({".py"})
+
+# file suffix -> parser language
+LANGUAGE_BY_SUFFIX: dict[str, str] = {
+    ".py": "python",
+    ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".ts": "typescript", ".mts": "typescript", ".cts": "typescript",
+    ".tsx": "tsx",
+}  # fmt: skip
+# user-facing language names -> parser languages
+LANGUAGE_GROUPS: dict[str, frozenset[str]] = {
+    "python": frozenset({"python"}),
+    "javascript": frozenset({"javascript"}),
+    "typescript": frozenset({"typescript", "tsx"}),
+}
 
 # Generated or vendored files this large are not worth indexing.
 MAX_FILE_BYTES = 1_000_000
@@ -46,6 +63,18 @@ def looks_binary(data: bytes) -> bool:
     return b"\x00" in data[:8192]
 
 
-def should_index(rel_path: PurePosixPath, size: int) -> bool:
+def language_of(rel_path: PurePosixPath) -> str | None:
+    """Parser language for a source file, or None. Declaration and minified files are skipped."""
+    name = rel_path.name
+    if name.endswith((".d.ts", ".d.mts", ".d.cts", ".min.js", ".min.mjs", ".bundle.js")):
+        return None
+    return LANGUAGE_BY_SUFFIX.get(rel_path.suffix)
+
+
+def should_index(
+    rel_path: PurePosixPath, size: int, languages: tuple[str, ...] = ("python",)
+) -> bool:
     """Path-level checks; content-level checks (binary) happen after reading."""
-    return is_python_file(rel_path) and not is_excluded_path(rel_path) and size <= MAX_FILE_BYTES
+    language = language_of(rel_path)
+    wanted = {p for group in languages for p in LANGUAGE_GROUPS[group]}
+    return language in wanted and not is_excluded_path(rel_path) and size <= MAX_FILE_BYTES

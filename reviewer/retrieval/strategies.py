@@ -29,10 +29,12 @@ class Candidate:
 def is_test_path(path: str) -> bool:
     p = PurePosixPath(path)
     return (
-        any(part in ("tests", "test") for part in p.parts[:-1])
+        any(part in ("tests", "test", "__tests__") for part in p.parts[:-1])
         or p.name.startswith("test_")
         or p.name.endswith("_test.py")
         or p.name == "conftest.py"
+        or ".test." in p.name  # foo.test.ts, foo.test.jsx
+        or ".spec." in p.name
     )
 
 

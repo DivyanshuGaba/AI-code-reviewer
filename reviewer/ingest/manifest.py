@@ -7,7 +7,7 @@ from pathlib import PurePosixPath
 
 from pydantic import BaseModel
 
-from reviewer.ingest.filters import looks_binary, should_index
+from reviewer.ingest.filters import language_of, looks_binary, should_index
 from reviewer.ingest.sources import Source, list_files
 
 
@@ -38,7 +38,7 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def build_manifest(source: Source) -> Manifest:
+def build_manifest(source: Source, languages: tuple[str, ...] = ("python",)) -> Manifest:
     entries: list[FileEntry] = []
     for rel in list_files(source):
         full = source.root / rel
@@ -46,7 +46,7 @@ def build_manifest(source: Source) -> Manifest:
             size = full.stat().st_size
         except OSError:
             continue
-        if not should_index(PurePosixPath(rel), size):
+        if not should_index(PurePosixPath(rel), size, languages):
             continue
         data = full.read_bytes()
         if looks_binary(data):
@@ -55,6 +55,7 @@ def build_manifest(source: Source) -> Manifest:
             FileEntry(
                 path=rel,
                 sha256=sha256_hex(data),
+                language=language_of(PurePosixPath(rel)) or "python",
                 size=len(data),
                 lines=data.count(b"\n") + (0 if data.endswith(b"\n") or not data else 1),
             )

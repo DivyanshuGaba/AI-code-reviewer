@@ -9,6 +9,7 @@ so downstream stages can weigh them.
 
 from __future__ import annotations
 
+import posixpath
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from pathlib import PurePosixPath
@@ -20,6 +21,14 @@ EdgeFn = Callable[[list[Symbol], Resolution], list[Edge]]
 # A bare method name shared by more symbols than this (`get`, `run`...) is noise.
 MAX_AMBIGUOUS = 5
 _MAX_REEXPORT_DEPTH = 3
+
+
+JS_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
+_JS_TRY = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts")
+
+
+def is_js_path(path: str) -> bool:
+    return path.endswith(JS_SUFFIXES)
 
 
 def _module_names(path: str) -> list[str]:
@@ -62,6 +71,8 @@ class _Resolver:
         self.exact_modules: dict[str, str] = {}
         self.suffix_modules: dict[str, set[str]] = defaultdict(set)
         for path in paths:
+            if not path.endswith(".py"):
+                continue  # dotted module names only make sense for Python files
             names = _module_names(path)
             if not names:
                 continue
@@ -71,7 +82,22 @@ class _Resolver:
 
     # -- module and export lookup ------------------------------------------------
 
+    def _js_module(self, spec: str, from_path: str) -> str | None:
+        """Resolve './x', '../lib/y' (relative specifiers only) to an indexed file."""
+        if not spec.startswith("."):
+            return None  # a package or an alias: outside what we can resolve
+        base = posixpath.normpath(posixpath.join(posixpath.dirname(from_path), spec))
+        stem, ext = posixpath.splitext(base)
+        candidates = [base] if ext in _JS_TRY else []
+        # TypeScript projects import './x.js' for a file that is x.ts
+        bases = [stem, base] if ext in _JS_TRY else [base]
+        for b in bases:
+            candidates += [f"{b}{e}" for e in _JS_TRY] + [f"{b}/index{e}" for e in _JS_TRY]
+        return next((c for c in candidates if c in self.paths), None)
+
     def module_path(self, module: str, from_path: str) -> str | None:
+        if is_js_path(from_path):
+            return self._js_module(module, from_path)
         if module.startswith("."):
             return self._relative_module(module, from_path)
         if module in self.exact_modules:
@@ -91,6 +117,14 @@ class _Resolver:
             if candidate in self.paths:
                 return candidate
         return None
+
+    @staticmethod
+    def _exported_names(imp: ImportRef) -> list[str]:
+        """Names to look for in the target file. A default import is bound to any local name,
+        so also try the local alias (`import Foo from './x'` usually means `export default Foo`)."""
+        if imp.name == "default" and imp.alias:
+            return ["default", imp.alias]
+        return [imp.name] if imp.name else []
 
     def lookup_exported(self, path: str, name: str, depth: int = 0) -> list[Symbol]:
         """Find top-level `name` in a file, following re-exports through imports."""
@@ -138,7 +172,7 @@ class _Resolver:
 
         name, qualifier = call.callee_name, call.qualifier
 
-        if qualifier in ("self", "cls"):
+        if qualifier in ("self", "cls", "this"):
             cls = self.enclosing_class(caller)
             if cls is not None:
                 hit = self.methods.get((caller.path, cls.qualname, name))
@@ -156,9 +190,10 @@ class _Resolver:
                     continue
                 target = self.module_path(imp.module, caller.path)
                 if target:
-                    hit = self.lookup_exported(target, imp.name)
-                    if hit:
-                        return edges(hit, "import")
+                    for exported in self._exported_names(imp):
+                        hit = self.lookup_exported(target, exported)
+                        if hit:
+                            return edges(hit, "import")
             if bound:
                 return []  # imported from outside the repo
             for imp in self.imports.get(caller.path, []):
@@ -192,24 +227,34 @@ class _Resolver:
         for imp in bound:
             if imp.name is None:
                 # `import a.b as c` -> c.x is a.b.x ; `import a.b` -> a.b.x is a.b.x
-                module = ".".join([imp.module, *rest]) if imp.alias else qualifier
+                if is_js_path(caller.path):
+                    if rest:
+                        continue  # `a.b.c()` on a namespace import is a property chain
+                    module = imp.module
+                else:
+                    module = ".".join([imp.module, *rest]) if imp.alias else qualifier
                 target = self.module_path(module, caller.path)
                 if target:
                     hit = self.lookup_exported(target, name)
                     if hit:
                         return edges(hit, "import")
             elif imp.name != "*":
-                sep = "" if imp.module.endswith(".") else "."
-                submodule = imp.module + sep + ".".join([imp.name, *rest])
-                target = self.module_path(submodule, caller.path)
-                if target:
-                    hit = self.lookup_exported(target, name)
-                    if hit:
-                        return edges(hit, "import")
+                if not is_js_path(caller.path):
+                    sep = "" if imp.module.endswith(".") else "."
+                    submodule = imp.module + sep + ".".join([imp.name, *rest])
+                    target = self.module_path(submodule, caller.path)
+                    if target:
+                        hit = self.lookup_exported(target, name)
+                        if hit:
+                            return edges(hit, "import")
                 if not rest:  # from m import Foo ; Foo.method()
                     source = self.module_path(imp.module, caller.path)
                     if source:
-                        for cls in self.lookup_exported(source, imp.name):
+                        for cls in (
+                            c
+                            for exported in self._exported_names(imp)
+                            for c in self.lookup_exported(source, exported)
+                        ):
                             if cls.kind == "class":
                                 hit = self.methods.get((cls.path, cls.qualname, name))
                                 if hit:
@@ -234,7 +279,7 @@ def file_dependencies(imports: list[ImportRef], paths: set[str]) -> dict[str, se
         if imp.path not in deps:
             continue  # the importing file is outside the requested set (e.g. a test file)
         targets: set[str] = set()
-        if imp.name and imp.name != "*":
+        if imp.name and imp.name != "*" and not is_js_path(imp.path):
             sep = "" if imp.module.endswith(".") else "."
             sub = resolver.module_path(imp.module + sep + imp.name, imp.path)
             if sub:

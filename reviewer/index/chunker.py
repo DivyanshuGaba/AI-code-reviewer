@@ -25,6 +25,7 @@ def make_chunk(
     class_name: str | None,
     signature: str,
     lines: list[str],
+    language: str = "python",
 ) -> Chunk:
     text = "\n".join(lines[start_line - 1 : end_line])
     return Chunk(
@@ -32,7 +33,7 @@ def make_chunk(
         path=path,
         start_line=start_line,
         end_line=end_line,
-        language="python",
+        language=language,
         symbol=qualname,
         content_hash=hashlib.sha256(text.encode()).hexdigest(),
         text=text,

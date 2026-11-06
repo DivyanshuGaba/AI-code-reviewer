@@ -32,6 +32,7 @@ from reviewer.evals.scoring import (
 from reviewer.llm.gateway import LLMRequest
 from reviewer.llm.schemas import Finding
 from reviewer.settings import load_settings
+from reviewer.verify.sandbox import ExecResult
 from tests.test_fix import passing_sandbox
 from tests.test_verify import FakeSandbox
 
@@ -450,3 +451,89 @@ def test_cli_eval_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     unknown = runner.invoke(app, ["eval", "run", "--case", "nope"])
     assert unknown.exit_code == 1 and "unknown case" in unknown.output
     assert runner.invoke(app, ["eval", "compare", "a.json", "b.json"]).exit_code == 1
+
+
+# -- the tests-flip metric, measured with real pytest on the shipped cases -----------------------
+
+
+class HostPytestSandbox:
+    """Runs commands on the host. ONLY for the trusted fixtures shipped in this repository."""
+
+    name = "host-for-tests-only"
+
+    def check_available(self) -> str | None:
+        return None
+
+    def run(self, workdir: Path, argv: list[str], timeout: int) -> ExecResult:
+        cmd = [sys.executable, *argv[1:]] if argv[0] == "python" else [
+            sys.executable, "-m", argv[0], *argv[1:]
+        ]  # fmt: skip
+        proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True, timeout=timeout,
+                              check=False)  # fmt: skip
+        return ExecResult(proc.returncode, proc.stdout, proc.stderr)
+
+
+def seeded(case_id: str, tmp: Path):  # type: ignore[no-untyped-def]
+    case_dir, spec = next((d, s) for d, s in CASES if s.id == case_id)
+    return spec, materialize(case_dir, spec, tmp / case_id, "buggy")
+
+
+def fix_diff(mat, file: str, old: str, new: str) -> str:  # type: ignore[no-untyped-def]
+    from reviewer.verify.apply_patch import make_diff
+
+    text = (mat.root / file).read_text()
+    assert text.count(old) == 1, old
+    return make_diff(file, text, text.replace(old, new))
+
+
+def test_each_fix_is_judged_with_the_other_seeded_bugs_reverted(tmp_path: Path) -> None:
+    spec, mat = seeded("pricing", tmp_path)  # two bugs: sign and threshold
+    box = HostPytestSandbox()
+    sign = next(b for b in spec.bugs if b.id == "sign")
+    threshold = next(b for b in spec.bugs if b.id == "threshold")
+
+    sign_fix = fix_diff(mat, "pricing.py", sign.new, sign.old)
+    threshold_fix = fix_diff(mat, "pricing.py", threshold.new, threshold.old)
+    # Correct fixes resolve their own bug even though the other bug still fails other tests.
+    assert resolves_by_tests(box, mat, "pricing.py", sign_fix, [threshold]) is True
+    assert resolves_by_tests(box, mat, "pricing.py", threshold_fix, [sign]) is True
+    # Without isolating, the same correct fix looks like a failure: the original flaw.
+    assert resolves_by_tests(box, mat, "pricing.py", sign_fix, []) is False
+
+
+def test_a_fix_that_does_not_fix_the_bug_is_not_counted(tmp_path: Path) -> None:
+    spec, mat = seeded("pricing", tmp_path)
+    box = HostPytestSandbox()
+    sign = next(b for b in spec.bugs if b.id == "sign")
+    others = [b for b in spec.bugs if b.id != "sign"]
+    harmless = fix_diff(mat, "pricing.py", "round(price", "round( price")  # reformat only
+    wrong = fix_diff(mat, "pricing.py", sign.new, "price * (1 - pct / 10)")  # a different bug
+    assert resolves_by_tests(box, mat, "pricing.py", harmless, others) is False
+    assert resolves_by_tests(box, mat, "pricing.py", wrong, others) is False
+
+
+def test_bugs_the_tests_cannot_see_are_not_measured(tmp_path: Path) -> None:
+    spec, mat = seeded("userdb", tmp_path)
+    timing = next(b for b in spec.bugs if b.id == "timing")
+    assert not timing.tests_detect
+    fix = fix_diff(mat, "users.py", timing.new, timing.old)
+    others = [b for b in spec.bugs if b.id != "timing"]
+    assert resolves_by_tests(HostPytestSandbox(), mat, "users.py", fix, others) is None
+
+
+def test_a_perfect_oracle_resolves_every_test_detectable_bug(tmp_path: Path) -> None:
+    from tests.fakes import FakeLLM
+
+    result = run_eval(
+        DEFAULT_CASES_DIR, llm=FakeLLM(Oracle(tmp_path)), sandbox=HostPytestSandbox(),
+        settings=SETTINGS, max_cost_usd=50.0, only=["pricing", "config", "inventory", "cache"],
+    )  # fmt: skip
+    detectable = sum(
+        b.tests_detect
+        for _, s in CASES
+        if s.id in {"pricing", "config", "inventory", "cache"}
+        for b in s.bugs
+    )
+    t = result.totals
+    assert t.fixes_resolve_tests.total == detectable == 9
+    assert t.fixes_resolve_tests.hit == detectable  # was 1 of N before bugs were isolated

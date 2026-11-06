@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from reviewer.evals.cases import Materialized, Variant, load_cases, materialize
+from reviewer.evals.cases import BugSpec, CaseSpec, Materialized, Variant, load_cases, materialize
 from reviewer.evals.models import (
     BugOutcome,
     CaseResult,
@@ -51,8 +51,28 @@ def fix_is_exact_for(mat: Materialized, file: str, qualname: str, diff: str) -> 
     return fix_is_exact(patched, (mat.clean_dir / file).read_text(), qualname)
 
 
-def resolves_by_tests(sandbox: Sandbox, mat: Materialized, file: str, diff: str) -> bool | None:
-    """Did the case's own tests go from failing to passing, with nothing else breaking?
+def _revert_bugs(root: Path, bugs: list[BugSpec]) -> None:
+    """Put the original code back for the given seeded bugs."""
+    for bug in bugs:
+        path = root / bug.file
+        text = path.read_text()
+        if text.count(bug.new) == 1:
+            path.write_text(text.replace(bug.new, bug.old, 1))
+
+
+def resolves_by_tests(
+    sandbox: Sandbox,
+    mat: Materialized,
+    file: str,
+    diff: str,
+    other_bugs: list[BugSpec] | None = None,
+) -> bool | None:
+    """Did the case's own tests go from failing to passing because of this fix, and nothing else?
+
+    A case can seed several bugs, and a fix for one cannot make tests that fail because of
+    another one pass. So the other seeded bugs are reverted in both copies (after the diff is
+    applied, since the diff was written against the fully seeded code), leaving exactly one
+    bug between the baseline and the patched copy.
 
     None when it cannot be measured (the bug is not test-detectable or tests did not run).
     """
@@ -67,6 +87,8 @@ def resolves_by_tests(sandbox: Sandbox, mat: Materialized, file: str, diff: str)
             apply_patch(patched, diff, {file})
         except PatchError:
             return False
+        _revert_bugs(base, other_bugs or [])
+        _revert_bugs(patched, other_bugs or [])
         before = parse_pytest(sandbox.run(base, PYTEST, 300).stdout)
         after = parse_pytest(sandbox.run(patched, PYTEST, 300).stdout)
     failing = {t for t, s in before.items() if s != "PASSED"}
@@ -77,6 +99,7 @@ def resolves_by_tests(sandbox: Sandbox, mat: Materialized, file: str, diff: str)
 
 def score_case(
     mat: Materialized,
+    spec: CaseSpec,
     findings: list[Finding],
     deep_targets: set[str],
     store: Store,
@@ -97,7 +120,11 @@ def score_case(
             )
             if sandbox_ok and sandbox is not None and bug.tests_detect and mat.tests_dir_present:
                 outcome.fix.resolves = resolves_by_tests(
-                    sandbox, mat, bug.file, finding.suggested_diff
+                    sandbox,
+                    mat,
+                    bug.file,
+                    finding.suggested_diff,
+                    [b for b in spec.bugs if b.id != bug.id],
                 )
         outcomes.append(outcome)
     false_positives = [
@@ -169,7 +196,7 @@ def run_eval(
             deep_targets = {c.target for c in report.calls if c.stage == "deep_review"}
             with Store(db_path_for(mat.root)) as store:
                 bugs, fps, ignored, arch = score_case(
-                    mat, report.findings, deep_targets, store, sandbox, sandbox_ok
+                    mat, spec, report.findings, deep_targets, store, sandbox, sandbox_ok
                 )
             spent += report.run.cost_usd
             result.cases.append(
